@@ -3,6 +3,8 @@
 A live terminal map of coding agents and orchestration traffic in Stencil's Tern.
 Uses the official `tern` CLI and local omp transcripts. No Tern plugin or relay service is required.
 
+![ternwatch showing four omp agents: a lead sends tasks to API, web and docs agents, and their replies arrive in the message feed](assets/ternwatch.png)
+
 ## Run
 
 Requires Rust and a running Tern daemon. Build and start from this directory:
