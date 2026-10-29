@@ -1,0 +1,14 @@
+[package]
+name = "ternwatch"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.104"
+chrono = "0.4.45"
+# `Paragraph::line_count`, to scroll the wrapped inspector exactly.
+ratatui = { version = "0.30.2", features = ["unstable-rendered-line-info"] }
+regex = "1.13.1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+unicode-width = "0.2.3"
