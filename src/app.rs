@@ -55,18 +55,14 @@ pub struct Packet {
     pub start: Instant,
 }
 
-pub enum Popup {
-    Help,
-    Message(u64),
-}
-
 pub struct App {
     pub model: Model,
     pub bin: String,
     pub self_pane: Option<PaneId>,
     pub selected: Option<PaneId>,
     pub focus: Focus,
-    /// Selected feed row by message seq; `None` follows the newest message.
+    /// Selected feed row by message seq; `None` follows the newest message. With the feed
+    /// focused, the panel above it shows this message's details.
     pub feed_selected: Option<u64>,
     /// Feed scrolled by the wheel or PgUp/PgDn: its top row's seq. `None` keeps the newest (or
     /// the selected) row in view.
@@ -75,8 +71,12 @@ pub struct App {
     pub feed_view: (usize, usize),
     /// Rows the inspector is scrolled down; drawing clamps it to the content.
     pub inspector_scroll: u16,
-    /// Rows the open popup is scrolled down; drawing clamps it to the content.
-    pub popup_scroll: u16,
+    /// The message the inspector showed in the last frame, so a different one starts at its top.
+    pub inspected: Option<u64>,
+    /// `?`: the keys and legend popup is open.
+    pub help: bool,
+    /// Rows the help popup is scrolled down; drawing clamps it to the content.
+    pub help_scroll: u16,
     /// `f`: only cross-pane messages in the feed. The selected agent, if any, narrows it further.
     pub cross_pane_only: bool,
     pub all_panes: bool,
@@ -85,7 +85,6 @@ pub struct App {
     pub flashes: HashMap<Node, (Instant, Color)>,
     pub animate: bool,
     pub color: bool,
-    pub popup: Option<Popup>,
     pub compose: Option<String>,
     pub status: Option<(String, Instant)>,
     pub error: Option<String>,
@@ -116,7 +115,9 @@ impl App {
             feed_top: None,
             feed_view: (0, 0),
             inspector_scroll: 0,
-            popup_scroll: 0,
+            inspected: None,
+            help: false,
+            help_scroll: 0,
             cross_pane_only: false,
             all_panes,
             mode: Mode::Live,
@@ -124,7 +125,6 @@ impl App {
             flashes: HashMap::new(),
             animate,
             color,
-            popup: None,
             compose: None,
             status: None,
             error: None,
@@ -396,23 +396,30 @@ impl App {
             }
             return;
         }
-        if self.popup.is_some() {
+        if self.help {
             let page = 3 * SCROLL_ROWS;
             match key.code {
-                KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q' | '?') => self.popup = None,
-                KeyCode::Up | KeyCode::Char('k') => self.scroll_popup(-1),
-                KeyCode::Down | KeyCode::Char('j') => self.scroll_popup(1),
-                KeyCode::PageUp => self.scroll_popup(-page),
-                KeyCode::PageDown | KeyCode::Char(' ') => self.scroll_popup(page),
-                KeyCode::Home => self.popup_scroll = 0,
+                KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q' | '?') => self.help = false,
+                KeyCode::Up | KeyCode::Char('k') => self.scroll_help(-1),
+                KeyCode::Down | KeyCode::Char('j') => self.scroll_help(1),
+                KeyCode::PageUp => self.scroll_help(-page),
+                KeyCode::PageDown | KeyCode::Char(' ') => self.scroll_help(page),
+                KeyCode::Home => self.help_scroll = 0,
                 _ => {}
             }
             return;
         }
         match key.code {
+            // With a feed row selected, Esc lets it go first: the panel shows the swarm or agent.
+            KeyCode::Esc if self.focus == Focus::Feed && self.feed_selected.is_some() => {
+                self.feed_selected = None
+            }
             KeyCode::Esc => self.select(None),
             KeyCode::Char('q') => self.quit = true,
-            KeyCode::Char('?') => self.open(Popup::Help),
+            KeyCode::Char('?') => {
+                self.help = true;
+                self.help_scroll = 0;
+            }
             KeyCode::Tab | KeyCode::BackTab => {
                 self.focus = if self.focus == Focus::Graph {
                     Focus::Feed
@@ -440,14 +447,11 @@ impl App {
             },
             KeyCode::Enter => match self.focus {
                 Focus::Graph => self.jump(),
-                Focus::Feed => {
-                    let seq = self
-                        .feed_selected
-                        .or_else(|| self.feed().last().map(|m| m.seq));
-                    if let Some(seq) = seq {
-                        self.open(Popup::Message(seq));
-                    }
+                // Details of the selected row show in the panel; with none, pick the newest.
+                Focus::Feed if self.feed_selected.is_none() => {
+                    self.feed_selected = self.feed().last().map(|m| m.seq)
                 }
+                Focus::Feed => {}
             },
             KeyCode::Char('m') => match self.selected.and_then(|s| self.model.agents.get(&s)) {
                 Some(agent) if agent.present => self.compose = Some(String::new()),
@@ -480,6 +484,8 @@ impl App {
                 };
                 match self.focus {
                     Focus::Graph => self.scroll_inspector(delta),
+                    // A selected row's details fill the panel; the page keys scroll them.
+                    Focus::Feed if self.feed_selected.is_some() => self.scroll_inspector(delta),
                     Focus::Feed => self.scroll_feed(delta),
                 }
             }
@@ -490,11 +496,11 @@ impl App {
     }
 
     pub fn handle_mouse(&mut self, mouse: MouseEvent) {
-        if self.popup.is_some() {
+        if self.help {
             // The popup covers the panels: the wheel scrolls it, clicks do nothing.
             match mouse.kind {
-                MouseEventKind::ScrollUp => self.scroll_popup(-SCROLL_ROWS),
-                MouseEventKind::ScrollDown => self.scroll_popup(SCROLL_ROWS),
+                MouseEventKind::ScrollUp => self.scroll_help(-SCROLL_ROWS),
+                MouseEventKind::ScrollDown => self.scroll_help(SCROLL_ROWS),
                 _ => {}
             }
             return;
@@ -546,15 +552,9 @@ impl App {
         self.inspector_scroll = (self.inspector_scroll as isize + delta).max(0) as u16;
     }
 
-    /// Opens a popup at its top.
-    fn open(&mut self, popup: Popup) {
-        self.popup = Some(popup);
-        self.popup_scroll = 0;
-    }
-
-    fn scroll_popup(&mut self, delta: isize) {
-        self.popup_scroll = self
-            .popup_scroll
+    fn scroll_help(&mut self, delta: isize) {
+        self.help_scroll = self
+            .help_scroll
             .saturating_add_signed(delta.clamp(i16::MIN as isize, i16::MAX as isize) as i16);
     }
 

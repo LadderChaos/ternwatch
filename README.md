@@ -37,10 +37,10 @@ not from today.
 | Arrow keys or h/j/k/l | Select an agent; the feed then lists only its messages, in and out. Up/down select messages when the feed has focus |
 | Tab | Switch between graph and message feed |
 | Mouse wheel | Scroll the agent panel or the message feed, whichever is under the pointer |
-| PgUp / PgDn | Scroll the focused panel: the agent panel with graph focus, else the feed |
-| Enter | Focus the selected pane in Tern, or open the selected message |
+| PgUp / PgDn | Scroll the focused panel: the agent panel with graph focus, else the feed. With a message selected in the feed, they scroll its details |
+| Enter | Focus the selected pane in Tern; in the feed, show the newest message's details |
 | m | Compose text for the selected pane; Enter sends the text and presses Enter there |
-| Escape | Deselect, so the feed lists every agent's messages; also cancels composition or closes a popup |
+| Escape | In the feed, leave a message's details; else deselect, so the feed lists every agent's messages. Also cancels composition or closes help |
 | r | Replay loaded history, or return to live |
 | Space | Pause or resume replay |
 | + / - | Change replay speed |
@@ -52,12 +52,14 @@ not from today.
 
 A click on a card selects it and copies its pane ID, as `c` does; so does a click on
 the underlined ID in the inspector. A click on empty graph space deselects, like Escape.
-A click on a message row selects it. Sending a message submits it in the
+A click on a message row selects it. With the feed focused, the side panel shows the
+selected message in full: sender, recipient, send time, delivery status and the whole
+text, without covering the graph. Sending a message submits it in the
 recipient's pane through `tern run`; review the text before you press Enter.
 
-Help and message popups scroll with Up/Down or j/k, PgUp/PgDn, Space (page down),
-or the mouse wheel. Home returns to the top. A scrollbar appears when the content
-does not fit; Escape, Enter, q or ? closes the popup. Each popup opens at the top.
+The help popup scrolls with Up/Down or j/k, PgUp/PgDn, Space (page down), or the
+mouse wheel. Home returns to the top. A scrollbar appears when the content does not
+fit; Escape, Enter, q or ? closes it. It opens at the top.
 
 ## Snapshots and options
 

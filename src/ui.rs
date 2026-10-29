@@ -1,4 +1,4 @@
-//! Rendering: header, the swarm graph, the inspector and message feed, popups.
+//! Rendering: header, the swarm graph, the inspector and message feed, the help popup.
 
 use std::cmp::Reverse;
 use std::collections::HashMap;
@@ -18,7 +18,7 @@ use ratatui::widgets::{
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::app::{App, Focus, Mode, PACKET_MS, Popup, WAIT_MS, packet_style};
+use crate::app::{App, Focus, Mode, PACKET_MS, WAIT_MS, packet_style};
 use crate::model::{Agent, Kind, Message, Node, PaneId};
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -107,10 +107,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     draw_graph(frame, graph, app, theme);
     draw_panel(frame, panel, app, theme);
     draw_footer(frame, footer, app, theme);
-    match app.popup {
-        Some(Popup::Help) => draw_help(frame, area, app, theme),
-        Some(Popup::Message(seq)) => draw_message(frame, area, app, seq, theme),
-        None => {}
+    if app.help {
+        draw_help(frame, area, app, theme);
     }
 }
 
@@ -212,7 +210,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App, theme: Theme) {
         let mut wide = vec![
             "←→ select",
             "Tab feed",
-            "⏎ jump/open",
+            "⏎ jump/details",
             "m message",
             "r replay",
             "f filter",
@@ -224,7 +222,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App, theme: Theme) {
         let mut short = vec![
             "←→ select",
             "Tab feed",
-            "⏎ open",
+            "⏎ jump",
             "m send",
             "r replay",
             "c copy",
@@ -894,20 +892,17 @@ fn put(buf: &mut Buffer, area: Rect, (x, y): (f64, f64), glyph: &str, style: Sty
 }
 
 fn draw_panel(frame: &mut Frame, area: Rect, app: &mut App, theme: Theme) {
-    // Inspector 40%, feed 60%: side by side when the panel is wide and short, else stacked.
-    let inspector_height = if area.width >= 80 && area.height < 20 {
-        area.height
-    } else {
-        (area.height * 2 / 5).max(8)
-    };
-    let (inspector, feed) = if area.width >= 80 && area.height < 20 {
+    // Inspector 40%, feed 60%: stacked when the panel is tall enough, else side by side. Stacked,
+    // the inspector takes at least 8 rows and the feed needs 5 (3 messages) under it.
+    let side_by_side = area.height < 20 && (area.width >= 80 || area.height < 13);
+    let (inspector, feed) = if side_by_side {
         let [left, right] =
             Layout::horizontal([Constraint::Percentage(40), Constraint::Percentage(60)])
                 .areas(area);
         (left, right)
     } else {
         let [top, bottom] = Layout::vertical([
-            Constraint::Length(inspector_height.min(area.height)),
+            Constraint::Length((area.height * 2 / 5).max(8).min(area.height)),
             Constraint::Min(0),
         ])
         .areas(area);
@@ -919,6 +914,14 @@ fn draw_panel(frame: &mut Frame, area: Rect, app: &mut App, theme: Theme) {
 
 fn draw_inspector(frame: &mut Frame, area: Rect, app: &mut App, theme: Theme) {
     app.hit_inspector = area;
+    // A feed row selected with the feed focused shows its details here.
+    let message = app
+        .feed_selected
+        .filter(|seq| app.focus == Focus::Feed && app.model.message(*seq).is_some());
+    if app.inspected != message {
+        app.inspected = message;
+        app.inspector_scroll = 0;
+    }
     let focused = app.focus == Focus::Graph;
     let selected = app.selected.and_then(|p| app.model.agents.get(&p));
     let block = Block::bordered()
@@ -929,13 +932,21 @@ fn draw_inspector(frame: &mut Frame, area: Rect, app: &mut App, theme: Theme) {
             theme.dim()
         })
         .title(Span::styled(
-            if selected.is_some() {
+            if message.is_some() {
+                " message · Esc: back "
+            } else if selected.is_some() {
                 " agent "
             } else {
                 " swarm "
             },
             Style::new().add_modifier(Modifier::BOLD),
         ));
+    if let Some(seq) = message {
+        let lines = message_lines(app, seq, theme, block.inner(area).width);
+        let (_, scroll) = scrolled(frame, area, block, lines, app.inspector_scroll, theme);
+        app.inspector_scroll = scroll;
+        return;
+    }
     let Some(agent) = selected else {
         let width = block.inner(area).width;
         let lines = overview(app, theme, width);
@@ -1302,14 +1313,14 @@ fn overview(app: &App, theme: Theme, width: u16) -> Vec<Line<'static>> {
                 ),
                 Style::new().add_modifier(Modifier::BOLD),
             ),
-            // About two panel rows; the feed and its popup have the rest.
+            // About two panel rows; selecting the message in the feed shows all of it.
             Span::raw(fit(text, 50)),
         ]));
     }
 
     lines.push(Line::raw(""));
     lines.push(Line::styled(
-        "Click a card or press ←/→ to see one agent and its messages only.",
+        "Click a card or press ←/→ to see one agent and its messages only. Click a message, or Tab then ↑, to see its details here.",
         theme.dim(),
     ));
     // Rows of two or more spans start with their label; wrap them under the label column.
@@ -1414,15 +1425,22 @@ fn draw_feed(frame: &mut Frame, area: Rect, app: &mut App, theme: Theme) {
         .feed_selected
         .and_then(|s| feed.iter().position(|m| m.seq == s));
     let max_start = feed.len().saturating_sub(rows);
-    // Scrolled by the wheel: keep that top row; else keep the selected (or newest) row in view.
+    // Scrolled by the wheel: keep that top row. Else keep the selected row in view, scrolling no
+    // further than needed, so a clicked row stays under the pointer; with none, show the newest.
     let start = match app
         .feed_top
         .and_then(|s| feed.iter().position(|m| m.seq == s))
     {
         Some(top) => top.min(max_start),
-        None => (selected.unwrap_or(feed.len() - 1) + 1)
-            .saturating_sub(rows)
-            .min(max_start),
+        None => match selected {
+            Some(selected) => app
+                .feed_view
+                .0
+                .max((selected + 1).saturating_sub(rows))
+                .min(selected)
+                .min(max_start),
+            None => max_start,
+        },
     };
     app.feed_view = (start, rows);
     let wall = App::now_ms();
@@ -1504,17 +1522,20 @@ fn draw_help(frame: &mut Frame, area: Rect, app: &mut App, theme: Theme) {
         ("Tab", "switch focus: graph ↔ message feed"),
         (
             "wheel  PgUp/Dn",
-            "scroll the panel under the pointer · the focused panel",
+            "scroll the panel under the pointer · the focused panel (a selected message's details)",
         ),
         (
             "Enter",
-            "graph: focus that pane in Tern · feed: open the message",
+            "graph: focus that pane in Tern · feed: show the newest message's details",
         ),
         ("m", "type a message into the selected pane's composer"),
         ("r", "replay recorded history ↔ back to live"),
         ("space  + -", "pause replay · replay speed"),
         ("f", "feed: cross-pane messages only, on/off"),
-        ("Esc", "deselect: the feed lists every agent's messages"),
+        (
+            "Esc",
+            "feed: back from a message's details · else deselect the agent",
+        ),
         ("a", "show every pane, not only omp agents"),
         (
             "c",
@@ -1585,42 +1606,15 @@ fn draw_help(frame: &mut Frame, area: Rect, app: &mut App, theme: Theme) {
     }
     lines.push(Line::raw(""));
     lines.push(Line::styled("Delivered means the text reached the recipient's transcript; it does not mean the agent acted on it.", theme.dim()));
-    app.popup_scroll = popup(
-        frame,
-        area,
-        "ternwatch keys",
-        lines,
-        76,
-        area.height,
-        app.popup_scroll,
-        theme,
-    );
-}
-
-/// A centered popup up to `width` wide and as tall as its wrapped `lines`, at most `max_height`.
-/// When they do not fit it scrolls (↑↓, PgUp/PgDn, the wheel) and says so in its title. Returns
-/// the scroll clamped to the content.
-#[allow(clippy::too_many_arguments)]
-fn popup(
-    frame: &mut Frame,
-    area: Rect,
-    title: &str,
-    lines: Vec<Line>,
-    width: u16,
-    max_height: u16,
-    scroll: u16,
-    theme: Theme,
-) -> u16 {
-    let width = width.min(area.width);
+    // As tall as its wrapped rows; on a shorter screen it scrolls.
+    let width = 76.min(area.width);
     let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
     let rows = paragraph.line_count(width.saturating_sub(2));
-    let height = rows
-        .saturating_add(2)
-        .min(max_height.min(area.height) as usize) as u16;
+    let height = rows.saturating_add(2).min(area.height as usize) as u16;
     let title = if rows.saturating_add(2) > height as usize {
-        format!(" {title} · ↑↓ scroll · Esc closes ")
+        " ternwatch keys · ↑↓ scroll · Esc closes "
     } else {
-        format!(" {title} · Esc closes ")
+        " ternwatch keys · Esc closes "
     };
     let rect = center_rect(area, width, height);
     frame.render_widget(Clear, rect);
@@ -1628,78 +1622,90 @@ fn popup(
         .border_type(BorderType::Rounded)
         .title(title);
     let visible = block.inner(rect).height as usize;
-    let scroll = (scroll as usize).min(rows.saturating_sub(visible)) as u16;
+    let scroll = (app.help_scroll as usize).min(rows.saturating_sub(visible)) as u16;
     frame.render_widget(paragraph.block(block).scroll((scroll, 0)), rect);
     scrollbar(frame, rect, rows, visible, scroll as usize, theme);
-    scroll
+    app.help_scroll = scroll;
 }
 
-fn draw_message(frame: &mut Frame, area: Rect, app: &mut App, seq: u64, theme: Theme) {
+/// A message's details for the inspector: kind, ends, times and delivery, each wrapped under its
+/// label, then the full text.
+fn message_lines(app: &App, seq: u64, theme: Theme, width: u16) -> Vec<Line<'static>> {
     let Some(message) = app.model.message(seq) else {
-        return;
+        return Vec::new();
     };
     let endpoint = |node: &Node| match node {
         Node::Pane(p) => format!("{} (pane {p})", app.model.name(node)),
         Node::Sub(p, name) => format!("{name} (subagent of {})", app.model.name(&Node::Pane(*p))),
     };
-    let key = |text: &'static str| Span::styled(format!("{text:<10}"), theme.dim());
     let kind = match message.kind {
         Kind::Pane => "cross-pane message",
         Kind::Irc => "omp IRC message",
         Kind::Spawn => "subagent spawn",
         Kind::Yield => "subagent yield",
     };
-    let mut lines = vec![
-        Line::from(vec![key("kind"), Span::raw(kind)]),
-        Line::from(vec![key("from"), Span::raw(endpoint(&message.from))]),
-        Line::from(vec![key("to"), Span::raw(endpoint(&message.to))]),
-        Line::from(vec![
-            key("sent"),
+    let mut rows = vec![
+        ("kind", Span::raw(kind)),
+        ("from", Span::raw(endpoint(&message.from))),
+        ("to", Span::raw(endpoint(&message.to))),
+        (
+            "sent",
             Span::raw(
                 message
                     .sent
                     .map(stamp)
                     .unwrap_or_else(|| "not in the sender's transcript".into()),
             ),
-        ]),
+        ),
     ];
     if message.kind == Kind::Pane {
-        let delivered = match (message.delivered, message.sent) {
-            (Some(d), Some(s)) => format!("{} (+{})", stamp(d), duration(d - s)),
-            (Some(d), None) => stamp(d),
-            (None, _) if message.failed => "send failed".into(),
-            (None, _) if !observable(app, message) => {
-                "not observable: the recipient has no omp transcript".into()
-            }
-            (None, _) => "not seen in the recipient's transcript".into(),
+        // The feed's status glyphs and colors, spelled out.
+        let (text, color) = match (message.delivered, message.sent) {
+            (None, _) if message.failed => ("✗ send failed".into(), Color::LightRed),
+            (Some(d), Some(s)) => (
+                format!("✓ {} (+{})", stamp(d), duration(d - s)),
+                Color::Green,
+            ),
+            (Some(d), None) => (format!("✓ {}", stamp(d)), Color::Green),
+            (None, _) if waiting(app, message, App::now_ms()) => (
+                "◌ on the way: not in the recipient's transcript yet".into(),
+                Color::Yellow,
+            ),
+            (None, _) if !observable(app, message) => (
+                "· not observable: the recipient has no omp transcript".into(),
+                Color::DarkGray,
+            ),
+            (None, _) => (
+                "? not seen in the recipient's transcript".into(),
+                Color::LightRed,
+            ),
         };
-        lines.push(Line::from(vec![key("delivered"), Span::raw(delivered)]));
+        rows.push(("delivered", Span::styled(text, theme.fg(color))));
     }
     if let Some(outcome) = &message.outcome {
-        lines.push(Line::from(vec![key("receipt"), Span::raw(outcome.clone())]));
+        rows.push(("receipt", Span::raw(outcome.clone())));
     }
     if message.reply_to.is_some() {
-        lines.push(Line::from(vec![
-            key("reply"),
+        rows.push((
+            "reply",
             Span::raw("answers the previous message the other way"),
-        ]));
+        ));
     } else if message.replied {
-        lines.push(Line::from(vec![key("reply"), Span::raw("answered")]));
+        rows.push(("reply", Span::raw("answered")));
     }
+    let mut lines: Vec<Line<'static>> = rows
+        .into_iter()
+        .flat_map(|(key, value)| {
+            hang(
+                Span::styled(format!("{key:<10}"), theme.dim()),
+                vec![value],
+                width,
+            )
+        })
+        .collect();
     lines.push(Line::raw(""));
-    for line in message.text.lines() {
-        lines.push(Line::raw(line.to_string()));
-    }
-    app.popup_scroll = popup(
-        frame,
-        area,
-        "message",
-        lines,
-        area.width.saturating_sub(10).min(100),
-        area.height.saturating_sub(4),
-        app.popup_scroll,
-        theme,
-    );
+    lines.extend(message.text.lines().map(|line| Line::raw(line.to_string())));
+    lines
 }
 
 fn sub_of<'a>(app: &'a App, node: &Node) -> Option<&'a crate::model::Sub> {
@@ -1845,6 +1851,121 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_clicked_feed_row_stays_under_the_pointer() {
+        use crate::transcript::Event;
+        use ratatui::crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let row_text = |buffer: &Buffer, rect: Rect| -> String {
+            (rect.x..rect.right())
+                .map(|x| buffer[(x, rect.y)].symbol())
+                .collect()
+        };
+        // 60x16 is the minimum size; its feed must still show rows to click.
+        for (width, height) in [(80, 24), (60, 16)] {
+            let mut app = App::new(String::new(), false, false, false);
+            let sends = (1..=40)
+                .map(|i| Event::ToolCall {
+                    ts: i,
+                    id: format!("s{i}"),
+                    name: "bash".into(),
+                    intent: String::new(),
+                    args: serde_json::json!({"command": format!("tern run 7 'message {i}'")}),
+                })
+                .collect();
+            app.model.apply(9, None, sends);
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            let mut render = |app: &mut App| {
+                terminal.draw(|frame| draw(frame, app)).unwrap();
+                terminal.backend().buffer().clone()
+            };
+            let before = render(&mut app);
+            assert!(
+                app.hit_feed.len() >= 3,
+                "{width}x{height}: {} feed rows",
+                app.hit_feed.len()
+            );
+            // Each visible row in turn: the newest, the oldest and those between.
+            for i in 0..app.hit_feed.len() {
+                let (rect, seq) = app.hit_feed[i];
+                let text = row_text(&before, rect);
+                app.handle_mouse(MouseEvent {
+                    kind: MouseEventKind::Down(MouseButton::Left),
+                    column: rect.x + 1,
+                    row: rect.y,
+                    modifiers: KeyModifiers::NONE,
+                });
+                let after = render(&mut app);
+                assert_eq!(app.feed_selected, Some(seq));
+                assert_eq!(
+                    row_text(&after, rect),
+                    text,
+                    "{width}x{height}: row {i} moved"
+                );
+                assert!(
+                    after[(rect.x, rect.y)]
+                        .modifier
+                        .contains(Modifier::REVERSED),
+                    "{width}x{height}: row {i} is not highlighted"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn page_keys_scroll_a_selected_message_longer_than_the_panel() {
+        use crate::transcript::Event;
+        use ratatui::crossterm::event::{KeyCode, KeyEvent};
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let text: Vec<String> = (1..=40).map(|i| format!("line {i}")).collect();
+        let mut app = App::new(String::new(), false, false, false);
+        app.model.apply(
+            9,
+            None,
+            vec![Event::ToolCall {
+                ts: 1,
+                id: "a".into(),
+                name: "bash".into(),
+                intent: String::new(),
+                args: serde_json::json!({"command": format!("tern run 7 '{}'", text.join("\n"))}),
+            }],
+        );
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        let mut render = |app: &mut App| {
+            terminal.draw(|frame| draw(frame, app)).unwrap();
+            terminal
+                .backend()
+                .buffer()
+                .content()
+                .chunks(80)
+                .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        app.handle_key(KeyEvent::from(KeyCode::Tab));
+        app.handle_key(KeyEvent::from(KeyCode::Up));
+        let top = render(&mut app);
+        assert!(top.contains("message · Esc: back"), "{top}");
+        assert!(top.contains("kind") && !top.contains("line 40"), "{top}");
+        for _ in 0..10 {
+            app.handle_key(KeyEvent::from(KeyCode::PageDown));
+            render(&mut app);
+        }
+        let bottom = render(&mut app);
+        assert!(bottom.contains("message · Esc: back"), "{bottom}");
+        assert!(
+            bottom.contains("line 40") && !bottom.contains("kind"),
+            "{bottom}"
+        );
+        for _ in 0..10 {
+            app.handle_key(KeyEvent::from(KeyCode::PageUp));
+            render(&mut app);
+        }
+        assert_eq!(render(&mut app), top);
+    }
+
+    #[test]
     fn small_help_scrolls_to_the_legend_and_disclaimer_then_reopens_at_top() {
         use ratatui::crossterm::event::{KeyCode, KeyEvent};
         use ratatui::{Terminal, backend::TestBackend};
@@ -1878,13 +1999,13 @@ mod tests {
                 "{bottom}"
             );
             assert!(bottom.contains("agent acted on it."), "{bottom}");
-            let end = app.popup_scroll;
+            let end = app.help_scroll;
             app.handle_key(KeyEvent::from(KeyCode::PageDown));
             assert_eq!(render(&mut terminal, &mut app), bottom);
-            assert_eq!(app.popup_scroll, end);
+            assert_eq!(app.help_scroll, end);
             app.handle_key(KeyEvent::from(KeyCode::Up));
             render(&mut terminal, &mut app);
-            assert_eq!(app.popup_scroll, end - 1);
+            assert_eq!(app.help_scroll, end - 1);
             app.handle_key(KeyEvent::from(KeyCode::Home));
             assert_eq!(render(&mut terminal, &mut app), top);
             app.handle_key(KeyEvent::from(KeyCode::PageDown));
