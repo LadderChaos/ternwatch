@@ -165,6 +165,8 @@ pub struct Model {
     pub changes: Vec<Change>,
     /// Tool call id → messages it sent, to mark them failed when the call fails.
     pending_calls: HashMap<String, Vec<u64>>,
+    /// Original IRC sends, scoped by transcript source and tool call id until their receipts arrive.
+    irc_calls: HashMap<Node, HashMap<String, (i64, String)>>,
     next_seq: u64,
 }
 
@@ -306,6 +308,17 @@ impl Model {
                 }
             }
             "write" => {
+                if args
+                    .get("path")
+                    .and_then(Value::as_str)
+                    .is_some_and(|path| path.starts_with("agent://"))
+                    && let Some(text) = args.get("content").and_then(Value::as_str)
+                {
+                    self.irc_calls
+                        .entry(source.clone())
+                        .or_default()
+                        .insert(id.clone(), (ts, text.to_owned()));
+                }
                 // tern-control's typed terminal device: `write xd://tern_terminal {action, block, …}`.
                 if args.get("path").and_then(Value::as_str) == Some("xd://tern_terminal") {
                     let content = match args.get("content") {
@@ -430,6 +443,10 @@ impl Model {
                 }
             }
         }
+        let send = self
+            .irc_calls
+            .get_mut(source)
+            .and_then(|calls| calls.remove(id));
         let Some(irc) = details.get("message").filter(|_| name == "write") else {
             return;
         };
@@ -457,8 +474,10 @@ impl Model {
                 Kind::Irc,
                 from.clone(),
                 irc_node(pane, to),
-                String::new(),
-                Some(ts),
+                send.as_ref()
+                    .map(|(_, text)| text.clone())
+                    .unwrap_or_default(),
+                Some(send.as_ref().map_or(ts, |(sent, _)| *sent)),
                 Some(ts),
                 outcome,
             );
@@ -946,6 +965,60 @@ line' ; tern run $TERN_PANE "self" ; tern send 7 keys enter ; tern run SDK "by t
             model.changes,
             vec![Change::Sent(1), Change::Sent(2), Change::Failed(2)]
         );
+    }
+
+    #[test]
+    fn irc_bodies_follow_their_call_and_source_across_broadcast_receipts() {
+        let mut model = Model::default();
+        let call = |id: &str, body: &str| Event::ToolCall {
+            ts: 10,
+            id: id.into(),
+            name: "write".into(),
+            intent: String::new(),
+            args: serde_json::json!({"path": "agent://all", "content": body}),
+        };
+        let receipt = |id: &str, from: &str| Event::ToolResult {
+            ts: 20,
+            id: id.into(),
+            name: "write".into(),
+            error: false,
+            tern_error: false,
+            details: serde_json::json!({"message": {"op": "send", "from": from,
+                "receipts": [{"to": "Scout", "outcome": "injected"},
+                             {"to": "Reviewer", "outcome": "woken"}]}}),
+        };
+        model.apply(9, None, vec![call("same", "parent\nfull message")]);
+        model.apply(10, None, vec![call("same", "other pane")]);
+        model.apply(9, Some("Worker"), vec![call("same", "worker body")]);
+        model.apply(9, Some("Worker"), vec![receipt("same", "Worker")]);
+        model.apply(10, None, vec![receipt("same", "Main")]);
+        model.apply(9, None, vec![receipt("same", "Main")]);
+        assert_eq!(model.messages.len(), 6);
+        for (pair, (from, body)) in model.messages.as_chunks::<2>().0.iter().zip([
+            (Node::Sub(9, "Worker".into()), "worker body"),
+            (Node::Pane(10), "other pane"),
+            (Node::Pane(9), "parent\nfull message"),
+        ]) {
+            for (message, (to, outcome)) in pair
+                .iter()
+                .zip([("Scout", "injected"), ("Reviewer", "woken")])
+            {
+                assert_eq!(message.from, from);
+                assert_eq!(message.to, Node::Sub(from.pane(), to.into()));
+                assert_eq!(message.text, body);
+                assert_eq!(message.outcome.as_deref(), Some(outcome));
+                assert_eq!(message.sent, Some(10));
+                assert_eq!(message.delivered, Some(20));
+            }
+        }
+        // A history tail may contain a receipt without its call; never reuse another body.
+        model.apply(9, None, vec![receipt("missing", "Main")]);
+        assert!(
+            model.messages[6..]
+                .iter()
+                .all(|message| message.text.is_empty())
+        );
+        assert!(model.irc_calls.values().all(HashMap::is_empty));
     }
 
     #[test]

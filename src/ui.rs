@@ -1462,11 +1462,12 @@ fn draw_feed(frame: &mut Frame, area: Rect, app: &mut App, theme: Theme) {
         );
         let text = message.text.lines().next().unwrap_or_default();
         let text = match message.kind {
-            Kind::Irc => message
-                .outcome
-                .clone()
-                .map(|o| format!("irc {o}"))
-                .unwrap_or_else(|| "irc".into()),
+            Kind::Irc => match (message.outcome.as_deref(), text.is_empty()) {
+                (Some(outcome), false) => format!("irc {outcome} · {text}"),
+                (Some(outcome), true) => format!("irc {outcome}"),
+                (None, false) => format!("irc · {text}"),
+                (None, true) => "irc".into(),
+            },
             Kind::Spawn => format!("spawn {}", text),
             Kind::Yield => "yield".into(),
             Kind::Pane => text.to_string(),

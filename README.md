@@ -83,6 +83,9 @@ from the calling pane's environment, or its default window when run outside Tern
 
 - `◆` is a cross-pane message; `●` is an inferred reply to recent traffic in the opposite direction.
 - `•` is omp IRC; `✦` and `✓` mark subagent spawn and yield packets.
+- IRC rows show the receipt and a text preview. Select one for the full message body,
+  recovered from its matching `write agent://…` call. If that call is outside the
+  loaded history, only the receipt is available; `--history MB` loads a larger tail.
 - A delivery status of `✓` means the text appeared in the recipient's omp transcript. It does not prove that the agent acted on it.
 - `◌` means delivery is pending; `?` means it was not observed within three minutes; `✗` means the send reported failure.
 - `·` means the recipient has no omp transcript, so delivery is not observable.
