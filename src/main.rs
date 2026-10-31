@@ -5,7 +5,7 @@ mod tern;
 mod transcript;
 mod ui;
 
-use std::io::{IsTerminal, stdout};
+use std::io::{IsTerminal, Write, stdout};
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -25,7 +25,7 @@ ternwatch — live map of the coding agents in your Tern window and the messages
 
 usage:
   ternwatch [--no-animation] [--all-panes] [--history MB]
-  ternwatch --json [--history MB]
+  ternwatch --json [--follow] [--history MB]
   ternwatch --frame COLSxROWS [--all-panes] [--history MB]
 
 Reads `tern inspect --json` for panes and omp's session transcripts for traffic:
@@ -33,7 +33,8 @@ cross-pane messages (`tern run` / `tern send`), omp IRC, subagent spawns and yie
 It never writes to a pane unless you press m and send a message.
 
 options:
-  --json           print one snapshot (agents and messages) as JSON and exit
+  --json           print a snapshot (agents and messages) as JSON and exit
+  --follow         with --json, stream snapshots as newline-delimited JSON
   --frame WxH      print one rendered frame as text and exit, e.g. --frame 160x48
   --no-animation   no moving packets or spinners; state stays readable
   --all-panes      show every terminal pane, not only omp agents
@@ -48,6 +49,7 @@ environment:
 
 struct Args {
     json: bool,
+    follow: bool,
     frame: Option<(u16, u16)>,
     animate: bool,
     all_panes: bool,
@@ -58,6 +60,7 @@ fn parse_args() -> Result<Option<Args>> {
     let mut args = Args {
         json: false,
         frame: None,
+        follow: false,
         animate: true,
         all_panes: false,
         history: 4 << 20,
@@ -66,6 +69,7 @@ fn parse_args() -> Result<Option<Args>> {
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--json" => args.json = true,
+            "--follow" => args.follow = true,
             "--frame" => {
                 let size = iter.next().and_then(|v| {
                     let (w, h) = v.split_once('x')?;
@@ -99,6 +103,9 @@ fn parse_args() -> Result<Option<Args>> {
             other => bail!("unknown argument {other}; see ternwatch --help"),
         }
     }
+    if args.follow && !args.json {
+        bail!("--follow requires --json");
+    }
     Ok(Some(args))
 }
 
@@ -108,7 +115,11 @@ fn main() -> Result<()> {
     };
     let bin = tern::binary();
     if args.json {
-        return snapshot(&bin, args.history);
+        return if args.follow {
+            follow(&bin, args.history)
+        } else {
+            snapshot(&bin, args.history)
+        };
     }
     if let Some((width, height)) = args.frame {
         return frame(bin, args.history, args.all_panes, width, height);
@@ -118,7 +129,7 @@ fn main() -> Result<()> {
     }
     let color = std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty());
     let (tx, rx) = mpsc::channel();
-    source::spawn(
+    let _source = source::spawn(
         source::Options {
             bin: bin.clone(),
             history: args.history,
@@ -229,6 +240,61 @@ fn frame(bin: String, history: u64, all_panes: bool, width: u16, height: u16) ->
 /// One full read of panes and transcripts, printed as JSON.
 fn snapshot(bin: &str, history: u64) -> Result<()> {
     let model = load(bin, history)?;
+    println!("{}", serde_json::to_string_pretty(&snapshot_value(&model))?);
+    Ok(())
+}
+
+/// Stream the initial history and subsequent watcher updates as complete snapshots.
+fn follow(bin: &str, history: u64) -> Result<()> {
+    let (tx, rx) = mpsc::channel();
+    let _source = source::spawn(
+        source::Options {
+            bin: bin.to_owned(),
+            history,
+        },
+        tx,
+    );
+    let mut model = Model::default();
+    let mut loaded = false;
+    let mut error = None;
+    let stdout = stdout();
+    let mut out = stdout.lock();
+    for update in rx {
+        let changed = match update {
+            Update::Panes(panes) => {
+                error = None;
+                model.apply_panes(panes);
+                true
+            }
+            Update::Events { pane, sub, events } => {
+                model.apply(pane, sub.as_deref(), events);
+                true
+            }
+            Update::Baseline => {
+                model.live = true;
+                loaded = true;
+                true
+            }
+            Update::Error(message) => {
+                eprintln!("{message}");
+                error = Some(message);
+                true
+            }
+        };
+        if changed && (loaded || error.is_some()) {
+            let mut snapshot = snapshot_value(&model);
+            if let Some(error) = &error {
+                snapshot["error"] = json!(error);
+            }
+            serde_json::to_writer(&mut out, &snapshot)?;
+            writeln!(out)?;
+            out.flush()?;
+        }
+    }
+    bail!("live watcher stopped unexpectedly")
+}
+
+fn snapshot_value(model: &Model) -> Value {
     let now = App::now_ms();
     let node = |node: &Node| match node {
         Node::Pane(pane) => json!({"pane": pane}),
@@ -264,9 +330,5 @@ fn snapshot(bin: &str, history: u64) -> Result<()> {
             })
         })
         .collect();
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&json!({"agents": agents, "messages": messages}))?
-    );
-    Ok(())
+    json!({"agents": agents, "messages": messages})
 }

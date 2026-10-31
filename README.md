@@ -30,6 +30,19 @@ message. Cards sit on a ring; when the ring is too crowded, cards shrink, then f
 a grid, then become one-line chips without edges. Times carry a date when they are
 not from today.
 
+Live monitoring uses a persistent `tern events` subscription and native filesystem
+notifications for transcript changes. It takes an initial snapshot, then refreshes
+panes on relevant Tern events or transcript writes. It does not run periodic
+`tern inspect`, foreground-process queries, or transcript scans. Idle-time counters
+advance locally; UI animation still uses a redraw timer. A disconnected event
+stream reconnects with backoff.
+
+Tern's event stream does not report every working-state or foreground-process
+change. For panes without omp transcripts, those fields refresh on the next
+supported pane, title, directory, or layout event. omp transcript writes also
+trigger refreshes. This avoids polling but can leave transcriptless panes stale
+between events.
+
 ## Keys
 
 | Key | Action |
@@ -65,15 +78,22 @@ fit; Escape, Enter, q or ? closes it. It opens at the top.
 
 ```sh
 ternwatch --json
+ternwatch --json --follow
 ternwatch --frame 180x50
 ternwatch --no-animation
 ternwatch --all-panes --history 8
 ```
 
-`--json` prints agents and messages without opening the TUI. `--frame COLSxROWS`
-prints a single text frame; the minimum size is 60x16. `--history MB` controls the
-transcript tail loaded per agent at startup (default: 4 MB). `--no-animation`
-disables moving packets and spinners.
+`--json` prints agents and messages without opening the TUI. Add `--follow` to
+stream an initial snapshot and subsequent updates as newline-delimited JSON: each
+line is a complete object with the same `agents` and `messages` fields as the
+single snapshot. The stream uses the live watcher, flushes each line, and reports
+watcher errors on stderr while reconnecting where possible. `--follow` requires
+`--json`.
+
+`--frame COLSxROWS` prints a single text frame; the minimum size is 60x16.
+`--history MB` controls the transcript tail loaded per agent at startup (default:
+4 MB). `--no-animation` disables moving packets and spinners.
 
 Set `TERN_BIN` to select a Tern executable. Otherwise lookup uses `PATH`, then the
 macOS app bundle. Set `NO_COLOR` to disable color. Tern's CLI selects its window

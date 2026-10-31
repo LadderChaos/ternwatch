@@ -752,7 +752,7 @@ fn state_line(agent: &Agent, spin: &str, width: usize) -> String {
         return fit(&format!("{spin} {doing}"), width);
     }
     fit(
-        &format!("· idle {}", duration(agent.pane.quiet_ms as i64)),
+        &format!("· idle {}", duration(agent.pane.quiet_ms() as i64)),
         width,
     )
 }
@@ -963,7 +963,7 @@ fn draw_inspector(frame: &mut Frame, area: Rect, app: &mut App, theme: Theme) {
         Span::styled(format!("{spin} working"), theme.fg(Color::Green))
     } else {
         Span::styled(
-            format!("idle {}", duration(agent.pane.quiet_ms as i64)),
+            format!("idle {}", duration(agent.pane.quiet_ms() as i64)),
             theme.fg(Color::Gray),
         )
     };
@@ -1276,9 +1276,9 @@ fn overview(app: &App, theme: Theme, width: u16) -> Vec<Line<'static>> {
 
     let mut quiet: Vec<&&Agent> = agents
         .iter()
-        .filter(|a| !a.pane.working && a.pane.quiet_ms >= 30 * 60_000)
+        .filter(|a| !a.pane.working && a.pane.quiet_ms() >= 30 * 60_000)
         .collect();
-    quiet.sort_by_key(|a| Reverse(a.pane.quiet_ms));
+    quiet.sort_by_key(|a| Reverse(a.pane.quiet_ms()));
     if !quiet.is_empty() {
         let names: Vec<String> = quiet.iter().take(4).map(|a| name(a.pane.id)).collect();
         let more = quiet.len().saturating_sub(4);

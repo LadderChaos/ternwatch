@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
@@ -19,10 +20,21 @@ pub struct Pane {
     pub tab_name: Option<String>,
     pub working: bool,
     pub quiet_ms: u64,
+    /// When `quiet_ms` was sampled; age keeps advancing without querying Tern.
+    pub inspected_at: Option<Instant>,
     pub session_file: Option<PathBuf>,
     /// The agent CLI in the foreground when the pane has no omp transcript (`codex`, `claude`,
     /// `codex (acp)`, …), from `tern process`.
     pub cli: Option<String>,
+}
+
+impl Pane {
+    pub fn quiet_ms(&self) -> u64 {
+        self.quiet_ms
+            .saturating_add(self.inspected_at.map_or(0, |at| {
+                at.elapsed().as_millis().min(u128::from(u64::MAX)) as u64
+            }))
+    }
 }
 
 /// `TERN_BIN`, then `tern` on `PATH`, then the app bundle.
@@ -96,6 +108,7 @@ pub fn parse_inspect(root: &Value) -> Vec<Pane> {
             .and_then(Value::as_bool)
             .unwrap_or(false);
         pane.quiet_ms = live.get("quiet_ms").and_then(Value::as_u64).unwrap_or(0);
+        pane.inspected_at = Some(Instant::now());
         pane.session_file = live
             .get("omp_session_file")
             .and_then(Value::as_str)
@@ -214,6 +227,21 @@ fn str_of(value: &Value, key: &str) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn quiet_age_advances_without_another_inspection() {
+        let pane = Pane {
+            quiet_ms: 12,
+            inspected_at: Some(Instant::now() - std::time::Duration::from_secs(2)),
+            ..Pane::default()
+        };
+        assert!(pane.quiet_ms() >= 2012);
+        let saturated = Pane {
+            quiet_ms: u64::MAX,
+            ..pane
+        };
+        assert_eq!(saturated.quiet_ms(), u64::MAX);
+    }
 
     #[test]
     fn merges_live_state_into_blocks_and_skips_browser_blocks() {

@@ -2,6 +2,8 @@
 
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
@@ -14,6 +16,8 @@ pub struct Tail {
     started: bool,
     history: u64,
     partial: Vec<u8>,
+    #[cfg(unix)]
+    identity: Option<(u64, u64)>,
 }
 
 impl Tail {
@@ -24,6 +28,8 @@ impl Tail {
             started: false,
             history,
             partial: Vec::new(),
+            #[cfg(unix)]
+            identity: None,
         }
     }
 
@@ -31,15 +37,25 @@ impl Tail {
         let Ok(mut file) = File::open(&self.path) else {
             return Vec::new();
         };
-        let Ok(len) = file.metadata().map(|meta| meta.len()) else {
+        let Ok(metadata) = file.metadata() else {
             return Vec::new();
         };
+        let len = metadata.len();
+        #[cfg(unix)]
+        let replaced = {
+            let identity = (metadata.dev(), metadata.ino());
+            self.identity
+                .replace(identity)
+                .is_some_and(|old| old != identity)
+        };
+        #[cfg(not(unix))]
+        let replaced = false;
         let mut skip_partial = false;
         if !self.started {
             self.started = true;
             self.offset = len.saturating_sub(self.history);
             skip_partial = self.offset > 0;
-        } else if len < self.offset {
+        } else if replaced || len < self.offset {
             // Rewritten from scratch: start over.
             self.offset = 0;
             self.partial.clear();
@@ -295,10 +311,16 @@ fn collect(dir: &Path, prefix: &str, depth: usize, found: &mut Vec<(String, Path
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.extension().and_then(|ext| ext.to_str()) != Some("jsonl") {
+        let directory = entry.file_type().is_ok_and(|kind| kind.is_dir());
+        if !directory && path.extension().and_then(|ext| ext.to_str()) != Some("jsonl") {
             continue;
         }
-        let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+        let Some(stem) = (if directory {
+            path.file_name()
+        } else {
+            path.file_stem()
+        })
+        .and_then(|stem| stem.to_str()) else {
             continue;
         };
         // `__advisor.*` are advisors; `<timestamp>_<id>` files are side sessions, not subagents.
@@ -313,10 +335,13 @@ fn collect(dir: &Path, prefix: &str, depth: usize, found: &mut Vec<(String, Path
         } else {
             format!("{prefix}.{stem}")
         };
-        if depth < 3 {
-            collect(&path.with_extension(""), &name, depth + 1, found);
+        if directory {
+            if depth < 3 {
+                collect(&path, &name, depth + 1, found);
+            }
+        } else {
+            found.push((name, path));
         }
-        found.push((name, path));
     }
 }
 
@@ -347,6 +372,25 @@ mod tests {
         writeln!(file, "2}}").unwrap();
         file.flush().unwrap();
         assert_eq!(tail.poll(), vec![json!({"n": 2})]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tail_resets_after_truncation_or_atomic_replacement() {
+        let dir = std::env::temp_dir().join(format!("ternwatch-replace-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("session.jsonl");
+        std::fs::write(&path, "{\"n\":100}\n{\"unfinished\":").unwrap();
+        let mut tail = Tail::new(path.clone(), 1024);
+        assert_eq!(tail.poll(), vec![json!({"n": 100})]);
+        std::fs::write(&path, "{\"n\":2}\n").unwrap();
+        assert_eq!(tail.poll(), vec![json!({"n": 2})]);
+        let replacement = dir.join("replacement.jsonl");
+        std::fs::write(&replacement, "{\"n\":3}\n").unwrap();
+        std::fs::rename(&replacement, &path).unwrap();
+        assert_eq!(tail.poll(), vec![json!({"n": 3})]);
+        assert!(tail.poll().is_empty());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
