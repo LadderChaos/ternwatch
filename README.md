@@ -36,6 +36,9 @@ panes on relevant Tern events or transcript writes. It does not run periodic
 `tern inspect`, foreground-process queries, or transcript scans. Idle-time counters
 advance locally; UI animation still uses a redraw timer. A disconnected event
 stream reconnects with backoff.
+Transcript entry IDs prevent already observed events from being replayed after
+file replacement or truncation. Distinct entries with the same message text are
+kept; records without an entry ID cannot be reconciled this way.
 
 Tern's event stream does not report every working-state or foreground-process
 change. For panes without omp transcripts, those fields refresh on the next

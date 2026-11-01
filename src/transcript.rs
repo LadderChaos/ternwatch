@@ -1,5 +1,6 @@
 //! Tails omp session files (`~/.omp/agent/sessions/**.jsonl`) and turns their entries into events.
 
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 #[cfg(unix)]
@@ -16,6 +17,8 @@ pub struct Tail {
     started: bool,
     history: u64,
     partial: Vec<u8>,
+    /// Entry IDs remain stable when omp rewrites a transcript; offsets and inodes do not.
+    seen: HashSet<String>,
     #[cfg(unix)]
     identity: Option<(u64, u64)>,
 }
@@ -28,6 +31,7 @@ impl Tail {
             started: false,
             history,
             partial: Vec::new(),
+            seen: HashSet::new(),
             #[cfg(unix)]
             identity: None,
         }
@@ -83,7 +87,17 @@ impl Tail {
         lines
             .into_iter()
             .filter(|line| !line.is_empty())
-            .filter_map(|line| serde_json::from_slice(line).ok())
+            .filter_map(|line| serde_json::from_slice::<Value>(line).ok())
+            .filter(|entry| {
+                let Some(id) = entry.get("id").and_then(Value::as_str).filter(|id| !id.is_empty()) else {
+                    return true;
+                };
+                if self.seen.contains(id) {
+                    return false;
+                }
+                self.seen.insert(id.to_owned());
+                true
+            })
             .collect()
     }
 }
@@ -391,6 +405,101 @@ mod tests {
         std::fs::rename(&replacement, &path).unwrap();
         assert_eq!(tail.poll(), vec![json!({"n": 3})]);
         assert!(tail.poll().is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn tail_keeps_entry_identity_across_truncation_and_preserves_new_entries() {
+        let dir = std::env::temp_dir().join(format!("ternwatch-entry-ids-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("session.jsonl");
+        let first = json!({"id": "first", "text": "same message"});
+        let second = json!({"id": "second", "text": "same message"});
+        std::fs::write(&path, format!("{first}\n{second}\n")).unwrap();
+        let mut tail = Tail::new(path.clone(), 1024);
+        assert_eq!(tail.poll(), vec![first.clone(), second.clone()]);
+
+        // A shorter rewrite retains an already observed entry.
+        std::fs::write(&path, format!("{first}\n")).unwrap();
+        assert!(tail.poll().is_empty());
+        let mut file = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        let third = json!({"id": "third", "text": "same message"});
+        writeln!(file, "{second}\n{third}").unwrap();
+        assert_eq!(tail.poll(), vec![third]);
+
+        // Missing IDs cannot establish replay: preserve repeated records without them.
+        writeln!(file, "{{\"text\":\"same message\"}}\n{{\"text\":\"same message\"}}").unwrap();
+        assert_eq!(tail.poll().len(), 2);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rewritten_transcripts_do_not_duplicate_messages_or_delivery_updates() {
+        use crate::model::Model;
+
+        let dir = std::env::temp_dir().join(format!("ternwatch-message-replay-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sender = dir.join("sender.jsonl");
+        let recipient = dir.join("recipient.jsonl");
+        let send = json!({
+            "id": "bf9d0d32", "type": "message", "timestamp": "2026-11-01T13:28:45.047Z",
+            "message": {"role": "assistant", "content": [{
+                "type": "toolCall", "id": "call_15dd2b9807d64bafb079aa613774e586", "name": "bash",
+                "arguments": {"command": "tern run 2 \"From 1 (CHAT): PR52 pushed\""}
+            }]}
+        });
+        let delivery = json!({
+            "id": "f8fc01f1", "type": "message", "timestamp": "2026-11-01T13:28:50.932Z",
+            "message": {"role": "user", "content": [{"type": "text", "text": "From 1 (CHAT): PR52 pushed"}]}
+        });
+        std::fs::write(&sender, format!("{send}\n")).unwrap();
+        std::fs::write(&recipient, format!("{delivery}\n")).unwrap();
+        let mut outgoing = Tail::new(sender.clone(), 4096);
+        let mut incoming = Tail::new(recipient.clone(), 4096);
+        let mut model = Model::default();
+        model.apply(1, None, outgoing.poll().iter().flat_map(parse).collect());
+        model.apply(2, None, incoming.poll().iter().flat_map(parse).collect());
+        assert_eq!(model.messages.len(), 1);
+        let seq = model.messages[0].seq;
+        model.live = true;
+
+        // Replaying either endpoint used to add a sent-only or delivered-only row.
+        // Check after each rewrite: replaying both can otherwise merge the two extras.
+        for (path, entry, pane, tail) in [
+            (&sender, &send, 1, &mut outgoing),
+            (&recipient, &delivery, 2, &mut incoming),
+        ] {
+            let replacement = dir.join("replacement.jsonl");
+            std::fs::write(&replacement, format!("{entry}\n")).unwrap();
+            std::fs::rename(&replacement, path).unwrap();
+            model.apply(pane, None, tail.poll().iter().flat_map(parse).collect());
+            assert_eq!(model.messages.len(), 1, "replayed pane {pane}");
+            assert_eq!(model.messages[0].seq, seq);
+            assert_eq!(model.messages[0].sent, Some(1_793_539_725_047));
+            assert_eq!(model.messages[0].delivered, Some(1_793_539_730_932));
+            assert!(model.changes.is_empty());
+        }
+
+        // Two later transport entries with identical text are a genuine second send.
+        let mut next_send = send;
+        next_send["id"] = json!("send-again");
+        next_send["timestamp"] = json!("2026-11-01T13:29:45.047Z");
+        next_send["message"]["content"][0]["id"] = json!("call_send_again");
+        let mut next_delivery = delivery;
+        next_delivery["id"] = json!("delivery-again");
+        next_delivery["timestamp"] = json!("2026-11-01T13:29:50.932Z");
+        let mut file = std::fs::OpenOptions::new().append(true).open(&sender).unwrap();
+        writeln!(file, "{next_send}").unwrap();
+        let mut file = std::fs::OpenOptions::new().append(true).open(&recipient).unwrap();
+        writeln!(file, "{next_delivery}").unwrap();
+        model.apply(1, None, outgoing.poll().iter().flat_map(parse).collect());
+        model.apply(2, None, incoming.poll().iter().flat_map(parse).collect());
+        assert_eq!(model.messages.len(), 2);
+        assert_ne!(model.messages[1].seq, seq);
+        assert_eq!(model.messages[0].text, model.messages[1].text);
+        assert_eq!(model.messages[1].sent, Some(1_793_539_785_047));
+        assert_eq!(model.messages[1].delivered, Some(1_793_539_790_932));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
