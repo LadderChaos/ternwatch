@@ -94,6 +94,19 @@ single snapshot. The stream combines available updates into the latest snapshot,
 flushes each line, and reports watcher errors on stderr while reconnecting where
 possible. `--follow` requires `--json`.
 
+Every JSON message has an `id` (a `u64` model sequence, stable within a running
+process) and nullable `repeat_of` (the root message's `id`). A possible repeat is
+an inbound-only pane message (`sent_ms: null`, non-null `delivered_ms`) with the
+same sender and recipient and the same nonempty body after ignoring Unicode
+whitespace, delivered within 180,000 ms of the earliest eligible root. Windows
+are measured from that root, not extended by each repeat. Ties use `id` order.
+These are presentation hints: every message remains in `messages` with its
+original stored text and timestamps; no body is normalized or discarded.
+Consumers can group possible repeats with a count and reversible disclosure.
+Known sends remain separate. Late send evidence or older history recomputes the
+affected group, so clients must replace metadata from each complete snapshot.
+IDs are not persistent across process restarts or different history loads.
+
 `--frame COLSxROWS` prints a single text frame; the minimum size is 60x16.
 `--history MB` controls the transcript tail loaded per agent at startup (default:
 4 MB). `--no-animation` disables moving packets and spinners.

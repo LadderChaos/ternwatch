@@ -323,6 +323,7 @@ fn snapshot_value(model: &Model) -> Value {
         .iter()
         .map(|m| {
             json!({
+                "id": m.seq, "repeat_of": m.repeat_of,
                 "kind": match m.kind { Kind::Pane => "pane", Kind::Irc => "irc", Kind::Spawn => "spawn", Kind::Yield => "yield" },
                 "from": node(&m.from), "to": node(&m.to), "text": m.text,
                 "sent_ms": m.sent, "delivered_ms": m.delivered, "failed": m.failed, "outcome": m.outcome,
@@ -332,4 +333,53 @@ fn snapshot_value(model: &Model) -> Value {
         })
         .collect();
     json!({"agents": agents, "messages": messages})
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn snapshots_keep_repeat_records_and_publish_root_ids() {
+        let mut model = Model::default();
+        for (ts, body) in [(1_000, "one\ntwo"), (2_000, "one two")] {
+            model.apply(
+                2,
+                None,
+                vec![transcript::Event::User {
+                    ts,
+                    text: format!("From 1: {body}"),
+                }],
+            );
+        }
+        let snapshot = snapshot_value(&model);
+        let messages = snapshot["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0]["id"].as_u64(), Some(model.messages[0].seq));
+        assert_eq!(messages[1]["id"].as_u64(), Some(model.messages[1].seq));
+        assert!(messages[0]["repeat_of"].is_null());
+        assert_eq!(messages[1]["repeat_of"], messages[0]["id"]);
+        assert_eq!(messages[0]["text"], "one\ntwo");
+        assert_eq!(messages[1]["text"], "one two");
+
+        model.apply(
+            1,
+            None,
+            vec![transcript::Event::ToolCall {
+                ts: 900,
+                id: "late-send".into(),
+                name: "bash".into(),
+                args: json!({"command": "tern run 2 'one two'"}),
+                intent: String::new(),
+            }],
+        );
+        let updated = snapshot_value(&model);
+        let updated_messages = updated["messages"].as_array().unwrap();
+        assert_eq!(updated_messages.len(), 2);
+        for (before, after) in messages.iter().zip(updated_messages) {
+            assert_eq!(before["id"], after["id"]);
+            assert_eq!(before["text"], after["text"]);
+            assert!(after["repeat_of"].is_null());
+        }
+    }
 }

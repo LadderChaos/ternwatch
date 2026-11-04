@@ -18,6 +18,8 @@ pub type PaneId = u64;
 /// How far apart a send and its delivery may be recorded.
 const MATCH_BEFORE_MS: i64 = 5_000;
 const MATCH_AFTER_MS: i64 = 15 * 60_000;
+/// Possible pasted repeats must remain within three minutes of their root delivery.
+const REPEAT_WINDOW_MS: i64 = 180_000;
 /// A message counts as a reply when it goes back to the sender within this time.
 const REPLY_WINDOW_MS: i64 = 30 * 60_000;
 /// A subagent that has written nothing for this long is shown as idle.
@@ -60,6 +62,8 @@ pub struct Message {
     pub outcome: Option<String>,
     pub failed: bool,
     pub reply_to: Option<u64>,
+    /// Root sequence of a possible repeated inbound-only pane message; all records are retained.
+    pub repeat_of: Option<u64>,
     pub replied: bool,
 }
 
@@ -490,22 +494,26 @@ impl Model {
         let sender = from.pane();
         let candidate = self
             .messages
-            .iter_mut()
-            .filter(|m| {
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| {
                 m.kind == Kind::Pane
                     && m.sent.is_none()
                     && m.from.pane() == sender
                     && m.to == Node::Pane(to)
             })
-            .filter(|m| {
+            .filter(|(_, m)| {
                 m.delivered
                     .is_some_and(|d| d >= ts - MATCH_BEFORE_MS && d <= ts + MATCH_AFTER_MS)
             })
-            .min_by_key(|m| m.delivered);
-        if let Some(message) = candidate {
+            .min_by_key(|(_, m)| m.delivered)
+            .map(|(index, _)| index);
+        if let Some(index) = candidate {
+            let message = &mut self.messages[index];
             message.sent = Some(ts);
             message.from = from;
             let seq = message.seq;
+            self.classify_repeats(index);
             if self.live {
                 self.changes.push(Change::Sent(seq));
                 self.changes.push(Change::Delivered(seq));
@@ -553,6 +561,76 @@ impl Model {
             None,
         );
         self.link_reply(seq);
+        self.classify_inbound(self.messages.len() - 1);
+    }
+
+    /// Normal transcript appends need only one scan; older history needs a full regroup.
+    fn classify_inbound(&mut self, index: usize) {
+        let message = &self.messages[index];
+        if !message.text.chars().any(|c| !c.is_whitespace()) {
+            return;
+        }
+        let mut root = None;
+        for candidate in &self.messages[..index] {
+            if candidate.sent.is_some()
+                || candidate.delivered.is_none()
+                || !same_repeat_group(message, candidate)
+            {
+                continue;
+            }
+            if candidate.time() > message.time() {
+                self.classify_repeats(index);
+                return;
+            }
+            if candidate.repeat_of.is_none()
+                && message.time() <= candidate.time().saturating_add(REPEAT_WINDOW_MS)
+            {
+                root = Some(candidate.seq);
+            }
+        }
+        self.messages[index].repeat_of = root;
+    }
+
+    /// Recompute only this body and endpoint group, so late history or send evidence cannot
+    /// leave links to a newer delivery or to a message that is no longer inbound-only.
+    fn classify_repeats(&mut self, index: usize) {
+        if !self.messages[index].text.chars().any(|c| !c.is_whitespace()) {
+            return;
+        }
+        for other in 0..self.messages.len() {
+            if same_repeat_group(&self.messages[index], &self.messages[other]) {
+                self.messages[other].repeat_of = None;
+            }
+        }
+        let mut after = None;
+        loop {
+            let root = self
+                .messages
+                .iter()
+                .filter(|message| {
+                    message.sent.is_none()
+                        && message.delivered.is_some()
+                        && after.is_none_or(|end| message.time() > end)
+                        && same_repeat_group(&self.messages[index], message)
+                })
+                .min_by_key(|message| (message.time(), message.seq));
+            let Some(root) = root else { break };
+            let (seq, start) = (root.seq, root.time());
+            let end = start.saturating_add(REPEAT_WINDOW_MS);
+            for other in 0..self.messages.len() {
+                let message = &self.messages[other];
+                if message.seq != seq
+                    && message.sent.is_none()
+                    && message.delivered.is_some()
+                    && message.time() >= start
+                    && message.time() <= end
+                    && same_repeat_group(&self.messages[index], message)
+                {
+                    self.messages[other].repeat_of = Some(seq);
+                }
+            }
+            after = Some(end);
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -579,6 +657,7 @@ impl Model {
             outcome,
             failed: false,
             reply_to: None,
+            repeat_of: None,
             replied: false,
         });
         if self.live {
@@ -647,6 +726,18 @@ impl Model {
             .filter(|s| s.running(now))
             .count()
     }
+}
+
+/// Compare without allocating normalized strings or changing the stored message body.
+fn same_repeat_group(a: &Message, b: &Message) -> bool {
+    a.kind == Kind::Pane
+        && b.kind == Kind::Pane
+        && a.from.pane() == b.from.pane()
+        && a.to == b.to
+        && a.text
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .eq(b.text.chars().filter(|c| !c.is_whitespace()))
 }
 
 fn event_time(event: &Event) -> Option<i64> {
@@ -1082,5 +1173,165 @@ line' ; tern run $TERN_PANE "self" ; tern send 7 keys enter ; tern run SDK "by t
             split_title("", 5),
             (String::new(), "pane 5".into(), String::new())
         );
+    }
+}
+
+#[cfg(test)]
+mod repeat_tests {
+    use super::*;
+
+    #[test]
+    fn reported_inbound_pair_keeps_both_bodies_and_links_the_repeat() {
+        let mut model = Model::default();
+        let first = "Completed the review.\nReady for the next task.";
+        let second = "Completed  the review. Ready\tfor the next task.";
+        for (ts, text) in [(1_793_723_902_395, first), (1_793_724_045_756, second)] {
+            model.apply(
+                301_601_193_459_780,
+                None,
+                vec![Event::User {
+                    ts,
+                    text: format!("From 311866165297173 (agy): {text}"),
+                }],
+            );
+        }
+        assert_eq!(model.messages.len(), 2);
+        let root = &model.messages[0];
+        let repeat = &model.messages[1];
+        assert_ne!(root.seq, repeat.seq);
+        assert_eq!(root.repeat_of, None);
+        assert_eq!(repeat.repeat_of, Some(root.seq));
+        assert_eq!((root.text.as_str(), repeat.text.as_str()), (first, second));
+        assert_eq!((root.sent, repeat.sent), (None, None));
+        assert_eq!(root.delivered, Some(1_793_723_902_395));
+        assert_eq!(repeat.delivered, Some(1_793_724_045_756));
+    }
+
+    #[test]
+    fn repeats_require_nonempty_matching_bodies_endpoints_and_pane_kind() {
+        let mut model = Model::default();
+        for (from, to, text) in [
+            (1, 2, ""),
+            (1, 2, " \t\n\u{2003}"),
+            (1, 2, "hello"),
+            (3, 2, "hello"),
+            (1, 3, "hello"),
+            (1, 2, "Hello"),
+        ] {
+            model.inbound(from, to, 10_000, text.into());
+        }
+        model.record(
+            Kind::Irc,
+            Node::Pane(1),
+            Node::Pane(2),
+            "hello".into(),
+            None,
+            Some(10_001),
+            None,
+        );
+        model.inbound(1, 2, 10_002, "he\u{2003}llo".into());
+        assert!(model.messages[..7].iter().all(|m| m.repeat_of.is_none()));
+        assert_eq!(model.messages[7].repeat_of, Some(model.messages[2].seq));
+    }
+
+    #[test]
+    fn repeat_window_is_inclusive_and_does_not_slide() {
+        let mut model = Model::default();
+        for ts in [
+            0,
+            REPEAT_WINDOW_MS,
+            REPEAT_WINDOW_MS + 1,
+            REPEAT_WINDOW_MS * 2 + 1,
+        ] {
+            model.inbound(1, 2, ts, "same".into());
+        }
+        assert_eq!(model.messages[0].repeat_of, None);
+        assert_eq!(model.messages[1].repeat_of, Some(model.messages[0].seq));
+        assert_eq!(model.messages[2].repeat_of, None);
+        assert_eq!(model.messages[3].repeat_of, Some(model.messages[2].seq));
+    }
+
+    #[test]
+    fn observed_resends_stay_separate_in_both_read_orders() {
+        for sends_first in [true, false] {
+            let mut model = Model::default();
+            if sends_first {
+                model.outbound(Node::Pane(1), 2, 9_000, "same".into());
+                model.outbound(Node::Pane(1), 2, 19_000, "same".into());
+            }
+            model.inbound(1, 2, 10_000, "same".into());
+            model.inbound(1, 2, 20_000, "same".into());
+            if !sends_first {
+                model.outbound(Node::Pane(1), 2, 9_000, "same".into());
+                model.outbound(Node::Pane(1), 2, 19_000, "same".into());
+            }
+            assert_eq!(model.messages.len(), 2);
+            assert!(model.messages.iter().all(|m| {
+                m.sent.is_some() && m.delivered.is_some() && m.repeat_of.is_none()
+            }));
+        }
+    }
+
+    #[test]
+    fn late_outbound_for_either_root_or_repeat_reclassifies_remaining_deliveries() {
+        for confirm_root in [true, false] {
+            let mut model = Model::default();
+            for ts in [10_000, 20_000, 21_000] {
+                model.inbound(1, 2, ts, "same".into());
+            }
+            let confirmed = if confirm_root { 0 } else { 1 };
+            // Subagent sends also confirm the original pane-level delivery.
+            model.outbound(
+                Node::Sub(1, "Worker".into()),
+                2,
+                if confirm_root { 9_000 } else { 19_000 },
+                "same".into(),
+            );
+            assert_eq!(model.messages.len(), 3);
+            assert!(model.messages[confirmed].sent.is_some());
+            assert_eq!(model.messages[confirmed].repeat_of, None);
+            let remaining_root = if confirm_root { 1 } else { 0 };
+            assert_eq!(model.messages[remaining_root].repeat_of, None);
+            assert_eq!(
+                model.messages[2].repeat_of,
+                Some(model.messages[remaining_root].seq)
+            );
+        }
+    }
+
+    #[test]
+    fn history_arrival_order_cannot_change_chronological_groups() {
+        for order in [
+            [0, 120_000, 240_000, 300_000],
+            [300_000, 240_000, 120_000, 0],
+            [120_000, 300_000, 0, 240_000],
+        ] {
+            let mut model = Model::default();
+            for ts in order {
+                model.inbound(1, 2, ts, "same".into());
+            }
+            for message in &model.messages {
+                let expected_root_time = match message.time() {
+                    120_000 => Some(0),
+                    300_000 => Some(240_000),
+                    _ => None,
+                };
+                assert_eq!(
+                    message.repeat_of.map(|seq| model.message(seq).unwrap().time()),
+                    expected_root_time
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn equal_timestamps_choose_first_sequence_and_extreme_timestamps_are_safe() {
+        for ts in [i64::MIN, i64::MAX] {
+            let mut model = Model::default();
+            model.inbound(1, 2, ts, "same".into());
+            model.inbound(1, 2, ts, "same".into());
+            assert_eq!(model.messages[0].repeat_of, None);
+            assert_eq!(model.messages[1].repeat_of, Some(model.messages[0].seq));
+        }
     }
 }
