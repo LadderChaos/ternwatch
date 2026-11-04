@@ -89,7 +89,11 @@ impl Tail {
             .filter(|line| !line.is_empty())
             .filter_map(|line| serde_json::from_slice::<Value>(line).ok())
             .filter(|entry| {
-                let Some(id) = entry.get("id").and_then(Value::as_str).filter(|id| !id.is_empty()) else {
+                let Some(id) = entry
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .filter(|id| !id.is_empty())
+                else {
                     return true;
                 };
                 if self.seen.contains(id) {
@@ -422,13 +426,20 @@ mod tests {
         // A shorter rewrite retains an already observed entry.
         std::fs::write(&path, format!("{first}\n")).unwrap();
         assert!(tail.poll().is_empty());
-        let mut file = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
         let third = json!({"id": "third", "text": "same message"});
         writeln!(file, "{second}\n{third}").unwrap();
         assert_eq!(tail.poll(), vec![third]);
 
         // Missing IDs cannot establish replay: preserve repeated records without them.
-        writeln!(file, "{{\"text\":\"same message\"}}\n{{\"text\":\"same message\"}}").unwrap();
+        writeln!(
+            file,
+            "{{\"text\":\"same message\"}}\n{{\"text\":\"same message\"}}"
+        )
+        .unwrap();
         assert_eq!(tail.poll().len(), 2);
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -438,7 +449,8 @@ mod tests {
     fn rewritten_transcripts_do_not_duplicate_messages_or_delivery_updates() {
         use crate::model::Model;
 
-        let dir = std::env::temp_dir().join(format!("ternwatch-message-replay-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("ternwatch-message-replay-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let sender = dir.join("sender.jsonl");
         let recipient = dir.join("recipient.jsonl");
@@ -489,9 +501,15 @@ mod tests {
         let mut next_delivery = delivery;
         next_delivery["id"] = json!("delivery-again");
         next_delivery["timestamp"] = json!("2026-11-01T13:29:50.932Z");
-        let mut file = std::fs::OpenOptions::new().append(true).open(&sender).unwrap();
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&sender)
+            .unwrap();
         writeln!(file, "{next_send}").unwrap();
-        let mut file = std::fs::OpenOptions::new().append(true).open(&recipient).unwrap();
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&recipient)
+            .unwrap();
         writeln!(file, "{next_delivery}").unwrap();
         model.apply(1, None, outgoing.poll().iter().flat_map(parse).collect());
         model.apply(2, None, incoming.poll().iter().flat_map(parse).collect());

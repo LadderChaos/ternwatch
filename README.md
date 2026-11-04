@@ -90,9 +90,9 @@ ternwatch --all-panes --history 8
 `--json` prints agents and messages without opening the TUI. Add `--follow` to
 stream an initial snapshot and subsequent updates as newline-delimited JSON: each
 line is a complete object with the same `agents` and `messages` fields as the
-single snapshot. The stream uses the live watcher, flushes each line, and reports
-watcher errors on stderr while reconnecting where possible. `--follow` requires
-`--json`.
+single snapshot. The stream combines available updates into the latest snapshot,
+flushes each line, and reports watcher errors on stderr while reconnecting where
+possible. `--follow` requires `--json`.
 
 `--frame COLSxROWS` prints a single text frame; the minimum size is 60x16.
 `--history MB` controls the transcript tail loaded per agent at startup (default:

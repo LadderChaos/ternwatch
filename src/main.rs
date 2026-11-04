@@ -259,29 +259,30 @@ fn follow(bin: &str, history: u64) -> Result<()> {
     let mut error = None;
     let stdout = stdout();
     let mut out = stdout.lock();
-    for update in rx {
-        let changed = match update {
-            Update::Panes(panes) => {
-                error = None;
-                model.apply_panes(panes);
-                true
+    while let Ok(first) = rx.recv() {
+        // Apply all updates already available before serializing the complete state.
+        for update in std::iter::once(first).chain(rx.try_iter()) {
+            match update {
+                Update::Panes(panes) => {
+                    error = None;
+                    model.apply_panes(panes);
+                }
+                Update::Events { pane, sub, events } => {
+                    model.apply(pane, sub.as_deref(), events);
+                }
+                Update::Baseline => {
+                    model.live = true;
+                    loaded = true;
+                }
+                Update::Error(message) => {
+                    eprintln!("{message}");
+                    error = Some(message);
+                }
             }
-            Update::Events { pane, sub, events } => {
-                model.apply(pane, sub.as_deref(), events);
-                true
-            }
-            Update::Baseline => {
-                model.live = true;
-                loaded = true;
-                true
-            }
-            Update::Error(message) => {
-                eprintln!("{message}");
-                error = Some(message);
-                true
-            }
-        };
-        if changed && (loaded || error.is_some()) {
+        }
+        // Animation changes are only consumed by the interactive interface.
+        model.changes.clear();
+        if loaded || error.is_some() {
             let mut snapshot = snapshot_value(&model);
             if let Some(error) = &error {
                 snapshot["error"] = json!(error);
