@@ -138,6 +138,14 @@ envelope of a message it sent; one that only received messages shows its pane ID
 The watcher does not alter agent configuration. Pane writes occur only when you
 explicitly compose text with `m`; Enter on a card changes focus in Tern.
 
+## Tern Notch
+
+`notch/` holds Tern Notch, a macOS app that shows the same agents and messages in
+the MacBook camera notch. It runs `ternwatch --json --follow` and bundles the watcher
+built from this repository. See [notch/README.md](notch/README.md).
+
+![Tern Notch showing a conversation between two agents](notch/assets/tern-notch.png)
+
 ## Checks
 
 ```sh
@@ -145,3 +153,7 @@ cargo fmt --check
 cargo clippy --release -- -D warnings
 cargo test
 ```
+
+## License
+
+GNU General Public License v3; see `LICENSE`.
