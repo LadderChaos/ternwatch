@@ -45,9 +45,9 @@ On a notched display, the collapsed surface is exactly as tall as the camera hou
 
 Tern Notch lives in `notch/` of the ternwatch repository. It was previously the separate `LadderChaos/tern-notch` repository, which is now archived.
 
-- `TernNotch/`: the app sources (`TernNotchApp.swift`, `NotchHoverPolicy.swift`, `PixelKit.swift`, `Companion/`) and bundled font in `Resources/`.
+- `TernNotch/`: the app sources (`TernNotchApp.swift`, `NotchHoverPolicy.swift`, `PixelKit.swift`, `Companion/`), bundled font in `Resources/`, and the app icon in `Assets.xcassets`.
 - `TernNotch.xcodeproj`: the Xcode project with the single `TernNotch` target (bundle identifier `local.tern.notch`) and a "Bundle ternwatch" build phase.
-- `assets/`, `icon.svg`, `icon-concepts.html`: icon and artwork sources.
+- `assets/`, `icon.svg`, `icon-concepts.html`: icon and artwork sources. The `AppIcon` images are rendered from `icon.svg`; the 16, 32 and 64 px images use the heavier strokes shown in `icon-concepts.html`.
 - `STATUS.md`: current state. `DECISIONS.md`: architectural decisions. `CHANGELOG.md`: change history.
 
 ## Attribution and license

@@ -10,6 +10,9 @@
 - Group ternwatch's possible-repeat messages in conversation transcripts and agent exchanges with a reversible **Possible repeat · N copies** disclosure. Counts show grouped messages. Keep the transcript's 150-group and agent exchanges' 80-group presentation limits with lazy rendering; every original in a displayed group remains accessible, including its existing timestamp, full text, and copy action
 - Accept optional `id` and `repeat_of` stream fields while preserving older watcher compatibility. Stable receipt identity prevents late send observations or repeat reclassification from replaying fresh-message reactions; presentation limits leave the loaded message data intact
 
+### Added
+- App icon `AppIcon` in `TernNotch/Assets.xcassets`, rendered from `icon.svg` (the concentric orange rings under a notch). `icon.svg` now places the artwork on the 824-pixel body of the 1024-pixel macOS icon grid; the 16, 32 and 64 px images use the heavier strokes from `icon-concepts.html` so the rings stay visible
+
 ### Removed
 - Expanded conversation header's connecting line and comet animation; participant speaking/listening reactions and traffic glows remain
 - Legacy boring.notch fork sources and assets, `BoringNotchXPCHelper/`, `mediaremote-adapter/`, `Configuration/` tooling, the unused `Info.plist` and entitlements, and the stale SwiftPM `Package.resolved`; the app has no package dependencies
