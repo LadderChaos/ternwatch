@@ -13,8 +13,8 @@ use ratatui::crossterm::event::{
 use ratatui::layout::{Position, Rect};
 use ratatui::style::Color;
 
+use crate::backend::Backend;
 use crate::model::{Change, Kind, Message, Model, Node, PaneId};
-use crate::tern;
 
 pub const PACKET_MS: u64 = 1_100;
 pub const FLASH_MS: u64 = 1_400;
@@ -57,7 +57,7 @@ pub struct Packet {
 
 pub struct App {
     pub model: Model,
-    pub bin: String,
+    pub backend: Backend,
     pub self_pane: Option<PaneId>,
     pub selected: Option<PaneId>,
     pub focus: Focus,
@@ -104,11 +104,11 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(bin: String, animate: bool, color: bool, all_panes: bool) -> Self {
+    pub fn new(backend: Backend, animate: bool, color: bool, all_panes: bool) -> Self {
         Self {
             model: Model::default(),
-            bin,
-            self_pane: std::env::var("TERN_PANE").ok().and_then(|p| p.parse().ok()),
+            self_pane: backend.self_pane(),
+            backend,
             selected: None,
             focus: Focus::Graph,
             feed_selected: None,
@@ -612,10 +612,19 @@ impl App {
         };
     }
 
+    /// The pane's address for backend commands.
+    fn address(&self, pane: PaneId) -> String {
+        self.model
+            .agents
+            .get(&pane)
+            .map_or_else(|| pane.to_string(), |agent| agent.address())
+    }
+
     fn jump(&mut self) {
         let Some(pane) = self.selected else { return };
-        match tern::focus(&self.bin, pane) {
-            Ok(()) => self.set_status(format!("focused pane {pane}")),
+        let address = self.address(pane);
+        match self.backend.focus(&address) {
+            Ok(()) => self.set_status(format!("focused {} {address}", self.backend.pane_word())),
             Err(error) => self.set_status(format!("{error:#}")),
         }
     }
@@ -626,7 +635,7 @@ impl App {
             return;
         }
         let name = self.model.name(&Node::Pane(pane));
-        match tern::send(&self.bin, pane, &text) {
+        match self.backend.send(&self.address(pane), &text) {
             Ok(()) => self.set_status(format!("typed into {name}'s composer")),
             Err(error) => self.set_status(format!("{error:#}")),
         }
@@ -637,8 +646,9 @@ impl App {
             return self.set_status("select a pane to copy its id");
         };
         let name = self.model.name(&Node::Pane(pane));
-        match clipboard(&pane.to_string()) {
-            Ok(()) => self.set_status(format!("copied {name}'s pane id {pane}")),
+        let address = self.address(pane);
+        match clipboard(&address) {
+            Ok(()) => self.set_status(format!("copied {name}'s address {address}")),
             Err(error) => self.set_status(format!("{error:#}")),
         }
     }

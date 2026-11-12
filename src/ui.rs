@@ -19,6 +19,7 @@ use ratatui::widgets::{
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::{App, Focus, Mode, PACKET_MS, WAIT_MS, packet_style};
+use crate::backend::Backend;
 use crate::model::{Agent, Kind, Message, Node, PaneId};
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -254,10 +255,15 @@ fn draw_graph(frame: &mut Frame, area: Rect, app: &mut App, theme: Theme) {
     let agents = app.visible_agents();
     app.hit_graph = area;
     if agents.is_empty() {
-        let text = if app.loaded {
-            "No omp agents in this Tern window yet.\nStart one, or press a to show every pane."
-        } else {
-            "Reading Tern panes…"
+        let text = match (app.loaded, &app.backend) {
+            (true, Backend::Tern { .. }) => {
+                "No omp agents in this Tern window yet.\nStart one, or press a to show every pane."
+            }
+            (true, Backend::Herdr { .. }) => {
+                "No agents in herdr yet.\nStart one, or press a to show every terminal."
+            }
+            (false, Backend::Tern { .. }) => "Reading Tern panes…",
+            (false, Backend::Herdr { .. }) => "Reading herdr terminals…",
         };
         frame.render_widget(
             Paragraph::new(text)
@@ -752,7 +758,11 @@ fn state_line(agent: &Agent, spin: &str, width: usize) -> String {
         return fit(&format!("{spin} {doing}"), width);
     }
     fit(
-        &format!("· idle {}", duration(agent.pane.quiet_ms() as i64)),
+        &format!(
+            "· {} {}",
+            agent.pane.state(),
+            duration(agent.pane.quiet_ms() as i64)
+        ),
         width,
     )
 }
@@ -963,7 +973,11 @@ fn draw_inspector(frame: &mut Frame, area: Rect, app: &mut App, theme: Theme) {
         Span::styled(format!("{spin} working"), theme.fg(Color::Green))
     } else {
         Span::styled(
-            format!("idle {}", duration(agent.pane.quiet_ms() as i64)),
+            format!(
+                "{} {}",
+                agent.pane.state(),
+                duration(agent.pane.quiet_ms() as i64)
+            ),
             theme.fg(Color::Gray),
         )
     };
@@ -984,7 +998,7 @@ fn draw_inspector(frame: &mut Frame, area: Rect, app: &mut App, theme: Theme) {
         .map(|n| format!("tab {} {n}", agent.pane.tab))
         .unwrap_or_else(|| format!("tab {}", agent.pane.tab));
     // Underlined: a click copies the id (see the hit area below).
-    let id = agent.pane.id.to_string();
+    let id = agent.address();
     lines.push(Line::from(vec![
         key("pane"),
         Span::styled(id.clone(), Style::new().add_modifier(Modifier::UNDERLINED)),
@@ -997,10 +1011,21 @@ fn draw_inspector(frame: &mut Frame, area: Rect, app: &mut App, theme: Theme) {
         ]));
     }
     if let Some(cli) = &agent.pane.cli {
+        let note = match app.backend {
+            Backend::Tern { .. } => "no omp transcript, so deliveries to it are not observable",
+            Backend::Herdr { .. } => "herdr reports its state, not its messages",
+        };
         lines.push(Line::from(vec![
             key("agent"),
+            Span::raw(format!("{cli} · {note}")),
+        ]));
+    }
+    if let Some(parent) = agent.pane.parent {
+        lines.push(Line::from(vec![
+            key("from"),
             Span::raw(format!(
-                "{cli} · no omp transcript, so deliveries to it are not observable"
+                "started by {}",
+                app.model.name(&Node::Pane(parent))
             )),
         ]));
     }
@@ -1415,7 +1440,10 @@ fn draw_feed(frame: &mut Frame, area: Rect, app: &mut App, theme: Theme) {
                 "No messages to or from {}.\nEsc shows every agent's.",
                 app.model.name(&Node::Pane(pane))
             ),
-            None => "No messages yet. Agents talk with\n`tern run <pane> \"From $TERN_PANE …\"`,\nIRC, and subagents.".to_string(),
+            None => match app.backend {
+                Backend::Tern { .. } => "No messages yet. Agents talk with\n`tern run <pane> \"From $TERN_PANE …\"`,\nIRC, and subagents.".to_string(),
+                Backend::Herdr { .. } => "herdr reports no message text,\nso only agents and their state show.".to_string(),
+            },
         };
         frame.render_widget(Paragraph::new(text).style(theme.dim()), inner);
         return;
@@ -1527,7 +1555,7 @@ fn draw_help(frame: &mut Frame, area: Rect, app: &mut App, theme: Theme) {
         ),
         (
             "Enter",
-            "graph: focus that pane in Tern · feed: show the newest message's details",
+            "graph: focus that pane in its window · feed: show the newest message's details",
         ),
         ("m", "type a message into the selected pane's composer"),
         ("r", "replay recorded history ↔ back to live"),
@@ -1537,14 +1565,14 @@ fn draw_help(frame: &mut Frame, area: Rect, app: &mut App, theme: Theme) {
             "Esc",
             "feed: back from a message's details · else deselect the agent",
         ),
-        ("a", "show every pane, not only omp agents"),
+        ("a", "show every pane, not only agents"),
         (
             "c",
-            "copy the selected pane's id, for tern run / send / capture",
+            "copy the selected pane's address, for tern run or hc send",
         ),
         (
             "click",
-            "card: select it and copy its pane id · feed row: select it",
+            "card: select it and copy its address · feed row: select it",
         ),
         ("q  Ctrl-C", "quit"),
     ];
@@ -1864,7 +1892,7 @@ mod tests {
         };
         // 60x16 is the minimum size; its feed must still show rows to click.
         for (width, height) in [(80, 24), (60, 16)] {
-            let mut app = App::new(String::new(), false, false, false);
+            let mut app = App::new(Backend::Tern { bin: String::new() }, false, false, false);
             let sends = (1..=40)
                 .map(|i| Event::ToolCall {
                     ts: i,
@@ -1920,7 +1948,7 @@ mod tests {
         use ratatui::{Terminal, backend::TestBackend};
 
         let text: Vec<String> = (1..=40).map(|i| format!("line {i}")).collect();
-        let mut app = App::new(String::new(), false, false, false);
+        let mut app = App::new(Backend::Tern { bin: String::new() }, false, false, false);
         app.model.apply(
             9,
             None,
@@ -1972,7 +2000,7 @@ mod tests {
         use ratatui::{Terminal, backend::TestBackend};
 
         for (width, height) in [(80, 24), (60, 16)] {
-            let mut app = App::new(String::new(), false, false, false);
+            let mut app = App::new(Backend::Tern { bin: String::new() }, false, false, false);
             let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
             let render = |terminal: &mut Terminal<TestBackend>, app: &mut App| {
                 terminal.draw(|frame| draw(frame, app)).unwrap();

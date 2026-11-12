@@ -81,6 +81,8 @@ func agentHue(_ pane: UInt64, subagent: String? = nil) -> Color {
 enum TernPreferences {
     /// `@AppStorage` key: subagents take part in conversations on their own. Off by default.
     static let showSubagents = "ternShowSubagents"
+    /// `tern` or `herdr`: the window to watch. Unset lets the watcher pick: Tern when it runs, else herdr.
+    static let backend = "ternBackend"
 }
 
 extension UserDefaults {
@@ -497,7 +499,7 @@ struct TernView: View {
         return ScrollView(.horizontal) {
             HStack(spacing: 6) {
                 messageMenu(roster)
-                liveChip
+                if store.backend != .herdr { liveChip }
                 ForEach(chips) { conversationChip($0, roster, shown: $0.id == shown?.id) }
             }
             .padding(.vertical, 1)
@@ -570,7 +572,7 @@ struct TernView: View {
 
     private func recipientRow(_ agent: TernAgent) -> some View {
         let hue = agentHue(agent.pane)
-        let status = agent.open ? (agent.working ? "working" : "idle") : "closed"
+        let status = agent.open ? stateWord(agent) : "closed"
         return Button {
             withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) { state.pickingRecipient = false }
             openAgent(agent.pane)
@@ -592,7 +594,7 @@ struct TernView: View {
         }
         .buttonStyle(.plain)
         .disabled(!agent.open)
-        .help(agent.open ? "Write to \(agentName(agent))" : "Pane is closed")
+        .help(agent.open ? "Write to \(agentName(agent))" : "The \(paneWord) is closed")
         .accessibilityLabel("\(agentName(agent)), \(status)")
     }
 
@@ -657,6 +659,8 @@ struct TernView: View {
                     agentDetail(agent, roster)
                 } else if let conversation = conversation {
                     conversationPanel(conversation, roster)
+                } else if store.backend == .herdr && !store.agents.isEmpty {
+                    teamView(roster)
                 } else {
                     emptyState(roster)
                 }
@@ -675,7 +679,7 @@ struct TernView: View {
         return VStack(spacing: 8) {
             PixelIcon(glyph: store.isRunning ? .chat : .bolt, scale: 2)
                 .foregroundStyle(ternAccent)
-            Text(store.isRunning ? "No conversations yet" : "Watcher offline")
+            Text(!store.isRunning ? "Watcher offline" : store.backend == .herdr ? "No herdr agents yet" : "No conversations yet")
                 .font(.pixel())
             Group {
                 if !store.isRunning {
@@ -698,6 +702,86 @@ struct TernView: View {
         .multilineTextAlignment(.center)
         .frame(maxWidth: 380)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// herdr reports no message text, so the open notch lists its agents instead, each under the agent
+    /// that started it, with the state it reports.
+    private func teamView(_ roster: TernRoster) -> some View {
+        let rows = TeamRow.rows(roster.active + roster.idle)
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                sectionLabel("herdr agents")
+                countBadge(rows.count, color: ternAccent)
+                Spacer(minLength: 6)
+                Text("herdr reports state, not messages")
+                    .font(.pixel())
+                    .foregroundStyle(Color.white.opacity(0.35))
+                    .lineLimit(1)
+            }
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 4) {
+                    ForEach(rows) { teamRow($0.agent, depth: $0.depth) }
+                }
+                .padding(1)
+            }
+            .scrollIndicators(.never)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func teamRow(_ agent: TernAgent, depth: Int) -> some View {
+        let hue = agentHue(agent.pane)
+        let state = agent.open ? stateWord(agent) : "closed"
+        let attention = agent.status == "blocked" || agent.status == "error"
+        return Button { openAgent(agent.pane) } label: {
+            HStack(spacing: 8) {
+                AgentAvatar(hue: hue, mood: agentMood(agent), size: 18)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(agentName(agent)).foregroundStyle(hue).lineLimit(1)
+                    Text(teamDetail(agent)).foregroundStyle(Color.white.opacity(0.42)).lineLimit(1)
+                }
+                Spacer(minLength: 4)
+                Text(state).foregroundStyle(attention ? Color.orange : Color.white.opacity(agent.working ? 0.75 : 0.4))
+            }
+            .font(.pixel())
+            .padding(.horizontal, 8)
+            .frame(height: 38)
+            .background(PixelBox(2).fill(hue.opacity(0.08)))
+            .overlay(PixelBox(2).strokeBorder(attention ? Color.orange.opacity(0.6) : hue.opacity(0.4), lineWidth: 1))
+            .contentShape(PixelBox(2))
+        }
+        .buttonStyle(.plain)
+        .padding(.leading, CGFloat(depth) * 18)
+        .help("Open \(agentName(agent))")
+        .accessibilityLabel("\(agentName(agent)), \(state)\(depth > 0 ? ", started by the agent above" : "")")
+    }
+
+    /// Who started this herdr agent, and whom it started.
+    private func teamLinks(_ agent: TernAgent, _ roster: TernRoster) -> some View {
+        let children = store.agents.filter { $0.parent == agent.pane }
+        return VStack(alignment: .leading, spacing: 6) {
+            if let parent = agent.parent, roster.agent(parent) != nil {
+                HStack(spacing: 6) {
+                    sectionLabel("Started by")
+                    jumpButton(parent, roster, role: "parent")
+                }
+            }
+            if !children.isEmpty {
+                HStack(spacing: 6) {
+                    sectionLabel("Started")
+                    countBadge(children.count, color: agentHue(agent.pane))
+                    ScrollView(.horizontal) {
+                        HStack(spacing: 6) {
+                            ForEach(children) { jumpButton($0.pane, roster, role: "child") }
+                        }
+                    }
+                    .scrollIndicators(.never)
+                }
+            }
+            Text("herdr reports this agent's state, not its messages.")
+                .font(.pixel())
+                .foregroundStyle(Color.white.opacity(0.4))
+        }
     }
 
     // MARK: Conversation
@@ -895,14 +979,14 @@ struct TernView: View {
                         .lineLimit(1)
                 }
                 Spacer(minLength: 6)
-                Button { store.focus(agent.pane) } label: { Text("Focus") }
+                Button { store.focus(agent) } label: { Text("Focus") }
                     .disabled(!agent.open)
-                    .help("Focus pane \(agent.pane) in Tern")
-                Button { copy(String(agent.pane), token: "pane") } label: {
+                    .help("Show \(paneWord) \(agent.target) in \((store.backend ?? .tern).name)")
+                Button { copy(agent.target, token: "pane") } label: {
                     PixelIcon(glyph: copied == "pane" ? .check : .copy)
                 }
-                .help("Copy pane ID \(agent.pane)")
-                .accessibilityLabel("Copy pane ID")
+                .help("Copy \(paneWord) address \(agent.target)")
+                .accessibilityLabel("Copy \(paneWord) address")
             }
             .buttonStyle(PixelButtonStyle())
             .font(.pixel())
@@ -915,7 +999,7 @@ struct TernView: View {
             }
             if agentMood(agent) == .working || agentMood(agent) == .waiting || agent.todo != nil { nowCard(agent, hue: hue) }
             if !agent.subagents.isEmpty { subagentChips(agent, roster) }
-            Text(locationLine(agent))
+            Text(locationLine(agent, paneWord: paneWord))
                 .font(.pixel())
                 .foregroundStyle(Color.white.opacity(0.42))
                 .lineLimit(1)
@@ -923,12 +1007,17 @@ struct TernView: View {
                 .textSelection(.enabled)
                 .help(agent.cwd)
             Rectangle().fill(Color.white.opacity(0.07)).frame(height: 1)
-            HStack(spacing: 6) {
-                sectionLabel("Exchanges")
-                countBadge(related.count, color: hue)
+            if store.backend == .herdr {
+                teamLinks(agent, roster)
                 Spacer(minLength: 0)
+            } else {
+                HStack(spacing: 6) {
+                    sectionLabel("Exchanges")
+                    countBadge(related.count, color: hue)
+                    Spacer(minLength: 0)
+                }
+                exchangeList(related, roster, empty: "No exchanges with \(agentName(agent)) yet.")
             }
-            exchangeList(related, roster, empty: "No exchanges with \(agentName(agent)) yet.")
             composer(agent, hue: hue)
         }
     }
@@ -940,7 +1029,7 @@ struct TernView: View {
             Rectangle().fill(hue).frame(width: 2)
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
-                    Text(mood == .working ? "WORKING ON" : mood == .waiting ? "ORCHESTRATING" : "TASKS")
+                    Text(mood == .working ? "WORKING ON" : agent.status == "blocked" ? "NEEDS YOU" : mood == .waiting ? "ORCHESTRATING" : "TASKS")
                         .font(.pixel())
                         .tracking(1)
                         .foregroundStyle(hue)
@@ -1191,7 +1280,7 @@ struct TernView: View {
     private func composer(_ agent: TernAgent, hue: Color) -> some View {
         let canSend = agent.open && !state.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         return HStack(spacing: 7) {
-            TextField(agent.open ? "Message \(agentName(agent))…" : "Pane is closed", text: $state.draft)
+            TextField(agent.open ? "Message \(agentName(agent))…" : "The \(paneWord) is closed", text: $state.draft)
                 .textFieldStyle(.plain)
                 .font(.pixel())
                 .padding(.horizontal, 10).padding(.vertical, 7)
@@ -1208,7 +1297,7 @@ struct TernView: View {
             }
             .buttonStyle(.plain)
             .disabled(!canSend)
-            .help("Send to pane \(agent.pane)")
+            .help("Send to \(paneWord) \(agent.target)")
             .accessibilityLabel("Send to \(agentName(agent))")
         }
     }
@@ -1283,6 +1372,9 @@ struct TernView: View {
             .fixedSize()
     }
 
+    /// What the watched window calls one of its terminals.
+    private var paneWord: String { (store.backend ?? .tern).paneWord }
+
     // MARK: Helpers
 
     /// A fresh message from this endpoint is in flight: its face talks. Pulses expire, so this is finite.
@@ -1316,7 +1408,7 @@ struct TernView: View {
     private func send(to agent: TernAgent) {
         let text = state.draft
         guard agent.open, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        store.send(agent.pane, message: text)
+        store.send(agent, message: text)
         state.draft = ""
     }
 
@@ -1338,6 +1430,30 @@ struct TernView: View {
     }
 }
 
+/// One row of the herdr agent tree: roots in roster order, each followed by the agents it started.
+private struct TeamRow: Identifiable {
+    let agent: TernAgent
+    let depth: Int
+    var id: UInt64 { agent.pane }
+
+    static func rows(_ agents: [TernAgent]) -> [TeamRow] {
+        let panes = Set(agents.map(\.pane))
+        let hasParent: (TernAgent) -> Bool = { $0.parent.map(panes.contains) ?? false }
+        let children = Dictionary(grouping: agents.filter(hasParent)) { $0.parent ?? 0 }
+        var rows: [TeamRow] = []
+        var seen = Set<UInt64>()
+        func visit(_ agent: TernAgent, _ depth: Int) {
+            guard seen.insert(agent.pane).inserted else { return }
+            rows.append(TeamRow(agent: agent, depth: depth))
+            for child in children[agent.pane] ?? [] { visit(child, depth + 1) }
+        }
+        for agent in agents where !hasParent(agent) { visit(agent, 0) }
+        // Agents in a parent cycle have no root; they follow at the top level.
+        for agent in agents { visit(agent, 0) }
+        return rows
+    }
+}
+
 private enum DetailMode: Hashable {
     case empty
     case conversation(TernConversation.ID)
@@ -1348,7 +1464,8 @@ private enum DetailMode: Hashable {
 // MARK: - Agent avatars
 
 /// Real agent states an avatar can show. Avatars never invent feelings: each look maps to a state
-/// the stream reports (working, waiting on running subagents, idle, closed pane, watcher offline).
+/// the stream reports (working, waiting on running subagents or on the person, idle, closed pane,
+/// watcher offline).
 enum AgentMood: Equatable {
     case working
     case waiting
@@ -1441,13 +1558,20 @@ private func agentStatus(_ agent: TernAgent) -> String {
     if !agent.open { return "closed" }
     if agent.working { return agent.tool.map { $0.name.isEmpty ? "working" : $0.name } ?? "working" }
     if agent.subagents.contains(where: \.running) { return "orchestrating" }
-    return "idle"
+    return stateWord(agent)
+}
+
+/// The reported state word: `working`, `idle`, or herdr's `blocked`, `done` and `error`.
+func stateWord(_ agent: TernAgent) -> String {
+    if agent.working { return "working" }
+    return agent.status.flatMap { $0.isEmpty ? nil : $0 } ?? "idle"
 }
 
 func agentMood(_ agent: TernAgent) -> AgentMood {
     if !agent.open { return .closed }
     if agent.working { return .working }
-    if agent.subagents.contains(where: \.running) { return .waiting }
+    // Waiting on running subagents, or (herdr) blocked on the person.
+    if agent.subagents.contains(where: \.running) || agent.status == "blocked" { return .waiting }
     return .idle
 }
 
@@ -1455,6 +1579,7 @@ func agentMood(_ agent: TernAgent) -> AgentMood {
 private func intentLine(_ agent: TernAgent) -> String {
     let intent = agent.tool?.intent.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     if !intent.isEmpty { return intent }
+    if agent.status == "blocked" { return "Waiting for you to answer" }
     let running = agent.subagents.filter(\.running).count
     if !agent.working && running > 0 { return "Waiting on \(running) subagent\(running == 1 ? "" : "s")" }
     if let name = agent.tool?.name, !name.isEmpty { return "Running \(name)" }
@@ -1469,18 +1594,27 @@ private func toolTagName(_ agent: TernAgent) -> String? {
     return tool.name
 }
 
+/// The herdr tree row's second line: agent CLI, folder, and time quiet.
+private func teamDetail(_ agent: TernAgent) -> String {
+    let home = FileManager.default.homeDirectoryForCurrentUser.path
+    let cwd = agent.cwd.hasPrefix(home) ? "~" + agent.cwd.dropFirst(home.count) : agent.cwd
+    var parts = [agent.cli ?? "", cwd]
+    if agent.open && !agent.working { parts.append("quiet \(quietLabel(agent.quietMs))") }
+    return parts.filter { !$0.isEmpty }.joined(separator: " · ")
+}
+
 private func agentHeadline(_ agent: TernAgent) -> String {
     var parts = [agentStatus(agent)]
     if agent.open && !agent.working { parts.append("quiet \(quietLabel(agent.quietMs))") }
     if let model = agent.model, !model.isEmpty { parts.append(model) } else if let cli = agent.cli, !cli.isEmpty { parts.append(cli) }
-    parts.append("\(tokenLabel(agent.tokens)) tokens")
+    if agent.tokens > 0 { parts.append("\(tokenLabel(agent.tokens)) tokens") }
     return parts.joined(separator: " · ")
 }
 
-private func locationLine(_ agent: TernAgent) -> String {
+private func locationLine(_ agent: TernAgent, paneWord: String) -> String {
     let home = FileManager.default.homeDirectoryForCurrentUser.path
     let cwd = agent.cwd.hasPrefix(home) ? "~" + agent.cwd.dropFirst(home.count) : agent.cwd
-    return "pane \(agent.pane) · tab \(agent.tab)" + (cwd.isEmpty ? "" : " · \(cwd)")
+    return "\(paneWord) \(agent.target) · tab \(agent.tab)" + (cwd.isEmpty ? "" : " · \(cwd)")
 }
 
 private func quietLabel(_ milliseconds: UInt64) -> String {

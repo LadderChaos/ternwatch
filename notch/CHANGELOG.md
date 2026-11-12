@@ -9,9 +9,13 @@
 - Collapsed-wing working invaders continuously alternate a one-art-pixel bob and paired antenna spread every 450 ms, independently of message traffic; idle invaders stay static, fresh-message reactions take priority, and Reduce Motion disables animation and message poses. Open-notch avatars keep their occasional working blink or antenna wiggle
 - Group ternwatch's possible-repeat messages in conversation transcripts and agent exchanges with a reversible **Possible repeat · N copies** disclosure. Counts show grouped messages. Keep the transcript's 150-group and agent exchanges' 80-group presentation limits with lazy rendering; every original in a displayed group remains accessible, including its existing timestamp, full text, and copy action
 - Accept optional `id` and `repeat_of` stream fields while preserving older watcher compatibility. Stable receipt identity prevents late send observations or repeat reclassification from replaying fresh-message reactions; presentation limits leave the loaded message data intact
+- Focus and Send run the bundled `ternwatch --focus` / `--send` against the watched window instead of calling `tern` directly. A failed action appears as a banner. Stream agents decode the optional `address`, `status`, and `parent` fields and the snapshot's `backend`; older watchers still decode
+- The agent headline omits the token count when the stream reports none
+- The watcher no longer outlives the app. The app holds a pipe on the watcher's stdin, so the watcher exits even when the app is killed, and stopping, restarting or switching windows ends the watcher's whole process group, including its `tern events` or `hc events` command
 
 ### Added
 - App icon `AppIcon` in `TernNotch/Assets.xcassets`, rendered from `icon.svg` (the concentric orange rings under a notch). `icon.svg` now places the artwork on the 824-pixel body of the 1024-pixel macOS icon grid; the 16, 32 and 64 px images use the heavier strokes from `icon-concepts.html` so the rings stay visible
+- herdr support: the open header names the watched window, **TERN** or **HERDR**, and a click switches it. The choice is kept between launches (`ternBackend`); unset, the watcher picks Tern when it runs, else herdr. herdr mode shows a **HERDR AGENTS** tree (CLI, folder, time quiet, herdr's state word, children indented under the agent that started them) in place of conversations, hides **Live** and **Subagents**, and counts blocked agents in the header. Agent details show the hc address, Focus in the Herdr window, and a composer that sends through `hc send`. The collapsed tooltip names the watched window
 
 ### Removed
 - Expanded conversation header's connecting line and comet animation; participant speaking/listening reactions and traffic glows remain

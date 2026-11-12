@@ -10,7 +10,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 use serde_json::Value;
 
-use crate::tern::Pane;
+use crate::pane::Pane;
 use crate::transcript::Event;
 
 pub type PaneId = u64;
@@ -123,7 +123,15 @@ impl Agent {
 
     /// Title split into omp's short label and the rest: `󰗑 DEMO: Merge PR` → (`󰗑`, `DEMO`, `Merge PR`).
     pub fn label(&self) -> (String, String, String) {
-        split_title(&self.pane.title, self.pane.id)
+        split_title(&self.pane.title, &self.address())
+    }
+
+    /// What the backend's commands take for this pane.
+    pub fn address(&self) -> String {
+        match self.pane.address.as_str() {
+            "" => self.pane.id.to_string(),
+            address => address.to_string(),
+        }
     }
 
     pub fn repo(&self) -> String {
@@ -132,7 +140,8 @@ impl Agent {
     }
 }
 
-pub fn split_title(title: &str, id: PaneId) -> (String, String, String) {
+/// `address` names an untitled pane: `pane 7`, `pane t7`.
+pub fn split_title(title: &str, address: &str) -> (String, String, String) {
     let title = title.trim();
     let (icon, rest) = match title.split_once(' ') {
         Some((first, rest)) if !first.is_empty() && !first.chars().any(|c| c.is_ascii()) => {
@@ -145,7 +154,7 @@ pub fn split_title(title: &str, id: PaneId) -> (String, String, String) {
         _ => (rest, ""),
     };
     let label = if label.is_empty() {
-        format!("pane {id}")
+        format!("pane {address}")
     } else {
         label.to_string()
     };
@@ -175,6 +184,7 @@ pub struct Model {
 }
 
 impl Model {
+    /// Replaces the pane list. Closed panes stay only while messages involve them.
     pub fn apply_panes(&mut self, panes: Vec<Pane>) {
         for agent in self.agents.values_mut() {
             agent.present = false;
@@ -184,6 +194,13 @@ impl Model {
             agent.present = true;
             agent.pane = pane;
         }
+        let messages = &self.messages;
+        self.agents.retain(|id, agent| {
+            agent.present
+                || messages
+                    .iter()
+                    .any(|m| m.from.pane() == *id || m.to.pane() == *id)
+        });
     }
 
     /// Applies events read from the transcript of `pane`'s main session (`sub == None`) or of one
@@ -594,7 +611,11 @@ impl Model {
     /// Recompute only this body and endpoint group, so late history or send evidence cannot
     /// leave links to a newer delivery or to a message that is no longer inbound-only.
     fn classify_repeats(&mut self, index: usize) {
-        if !self.messages[index].text.chars().any(|c| !c.is_whitespace()) {
+        if !self.messages[index]
+            .text
+            .chars()
+            .any(|c| !c.is_whitespace())
+        {
             return;
         }
         for other in 0..self.messages.len() {
@@ -697,6 +718,7 @@ impl Model {
         self.agents.entry(pane).or_insert_with(|| Agent {
             pane: Pane {
                 id: pane,
+                address: pane.to_string(),
                 ..Pane::default()
             },
             ..Agent::default()
@@ -1162,16 +1184,16 @@ line' ; tern run $TERN_PANE "self" ; tern send 7 keys enter ; tern run SDK "by t
     #[test]
     fn splits_omp_titles() {
         assert_eq!(
-            split_title("\u{f0b7} DEMO: Merge PR #327", 37),
+            split_title("\u{f0b7} DEMO: Merge PR #327", "37"),
             ("\u{f0b7}".into(), "DEMO".into(), "Merge PR #327".into())
         );
         assert_eq!(
-            split_title("omp", 5),
+            split_title("omp", "5"),
             (String::new(), "omp".into(), String::new())
         );
         assert_eq!(
-            split_title("", 5),
-            (String::new(), "pane 5".into(), String::new())
+            split_title("", "t5"),
+            (String::new(), "pane t5".into(), String::new())
         );
     }
 }
@@ -1266,9 +1288,11 @@ mod repeat_tests {
                 model.outbound(Node::Pane(1), 2, 19_000, "same".into());
             }
             assert_eq!(model.messages.len(), 2);
-            assert!(model.messages.iter().all(|m| {
-                m.sent.is_some() && m.delivered.is_some() && m.repeat_of.is_none()
-            }));
+            assert!(
+                model.messages.iter().all(|m| {
+                    m.sent.is_some() && m.delivered.is_some() && m.repeat_of.is_none()
+                })
+            );
         }
     }
 
@@ -1317,7 +1341,9 @@ mod repeat_tests {
                     _ => None,
                 };
                 assert_eq!(
-                    message.repeat_of.map(|seq| model.message(seq).unwrap().time()),
+                    message
+                        .repeat_of
+                        .map(|seq| model.message(seq).unwrap().time()),
                     expected_root_time
                 );
             }

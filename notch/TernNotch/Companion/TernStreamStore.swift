@@ -2,14 +2,30 @@ import Combine
 import Foundation
 
 struct TernSnapshot: Decodable {
+    let backend: TernBackend?
     let agents: [TernAgent]
     let messages: [TernMessage]
     let error: String?
 }
 
+/// The window ternwatch reads. herdr reports agents and their state, but no message text.
+enum TernBackend: String, Decodable {
+    case tern
+    case herdr
+
+    var title: String { rawValue.uppercased() }
+    var name: String { self == .tern ? "Tern" : "herdr" }
+    /// What the window calls one of its terminals.
+    var paneWord: String { self == .tern ? "pane" : "terminal" }
+    var other: TernBackend { self == .tern ? .herdr : .tern }
+}
+
 struct TernAgent: Decodable, Identifiable {
     let pane: UInt64
     var id: UInt64 { pane }
+    /// What the backend's commands take: the Tern pane number, or an hc address (`t7`, `vps/t7`).
+    /// Absent from older watchers.
+    let address: String?
     let label: String
     let title: String
     let description: String
@@ -20,12 +36,18 @@ struct TernAgent: Decodable, Identifiable {
     let omp: Bool
     let cli: String?
     let working: Bool
+    /// `working`, `idle`, or herdr's own words `blocked`, `done` and `error`.
+    let status: String?
+    /// The herdr agent that started this one.
+    let parent: UInt64?
     let quietMs: UInt64
     let model: String?
     let tokens: UInt64
     let tool: TernTool?
     let todo: TernTodo?
     let subagents: [TernSubagent]
+
+    var target: String { address ?? String(pane) }
 }
 
 struct TernTool: Decodable {
@@ -86,11 +108,17 @@ struct TernMessage: Decodable {
 final class TernStreamStore: ObservableObject {
     @Published private(set) var agents: [TernAgent] = []
     @Published private(set) var messages: [TernMessage] = []
+    /// The backend the running watcher reads; nil until its first snapshot.
+    @Published private(set) var backend: TernBackend?
+    /// The backend the person chose; nil lets the watcher pick (Tern when it runs, else herdr).
+    @Published private(set) var choice = UserDefaults.standard.string(forKey: TernPreferences.backend).flatMap(TernBackend.init(rawValue:))
     @Published private(set) var error: String?
     @Published private(set) var actionError: String?
     @Published private(set) var isRunning = false
 
     private var process: Process?
+    /// The watcher's stdin. The watcher exits when it closes, so it also stops if this app dies.
+    private var input: Pipe?
     private var generation = UUID()
     private var shouldRun = false
     private var stderrBuffer = Data()
@@ -98,7 +126,17 @@ final class TernStreamStore: ObservableObject {
 
     deinit {
         retry?.cancel()
-        if let process = process, process.isRunning { process.terminate() }
+        Self.terminate(process, input: input)
+    }
+
+    /// Closes the watcher's stdin and ends its process group. `Process` starts the watcher as a
+    /// group leader, and its `tern events` or `hc events` child joins that group; terminating
+    /// only the watcher would leave the child running.
+    private static func terminate(_ process: Process?, input: Pipe?) {
+        try? input?.fileHandleForWriting.close()
+        guard let process, process.isRunning else { return }
+        let pid = process.processIdentifier
+        if pid > 0, getpgid(pid) == pid { kill(-pid, SIGTERM) } else { process.terminate() }
     }
 
     func start() {
@@ -112,11 +150,13 @@ final class TernStreamStore: ObservableObject {
         retry?.cancel()
         retry = nil
         generation = UUID()
-        if let process = process, process.isRunning { process.terminate() }
+        Self.terminate(process, input: input)
         process = nil
+        input = nil
         stderrBuffer.removeAll()
         agents = []
         messages = []
+        backend = nil
         isRunning = false
         error = nil
     }
@@ -126,12 +166,20 @@ final class TernStreamStore: ObservableObject {
         start()
     }
 
-    func focus(_ pane: UInt64) {
-        runAction(["focus", String(pane)])
+    /// Watches `backend` from now on, also after relaunch.
+    func choose(_ backend: TernBackend) {
+        UserDefaults.standard.set(backend.rawValue, forKey: TernPreferences.backend)
+        choice = backend
+        actionError = nil
+        restart()
     }
 
-    func send(_ pane: UInt64, message: String) {
-        runAction(["run", String(pane), message])
+    func focus(_ agent: TernAgent) {
+        runAction(["--focus", agent.target], verb: "Focus")
+    }
+
+    func send(_ agent: TernAgent, message: String) {
+        runAction(["--send", agent.target, message], verb: "Send")
     }
 
     private static func environment() -> [String: String] {
@@ -153,30 +201,46 @@ final class TernStreamStore: ObservableObject {
         return paths.first { fm.isExecutableFile(atPath: $0) }
     }
 
-    private func launch() {
-        guard shouldRun else { return }
-        let environment = Self.environment()
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        // The app bundles the ternwatch built from this repository; TERNWATCH_BIN overrides it for development.
+    /// The bundled ternwatch built from this repository; TERNWATCH_BIN overrides it for development.
+    private static func watcher(_ environment: [String: String]) -> String? {
         let override = environment["TERNWATCH_BIN"].flatMap { $0.isEmpty ? nil : $0 }
         let found = override != nil
-            ? Self.executable("ternwatch", override: override, environment: environment)
+            ? executable("ternwatch", override: override, environment: environment)
             : Bundle.main.url(forAuxiliaryExecutable: "ternwatch")?.path
-        guard let binary = found, FileManager.default.isExecutableFile(atPath: binary) else {
+        return found.flatMap { FileManager.default.isExecutableFile(atPath: $0) ? $0 : nil }
+    }
+
+    /// The environment ternwatch runs in: a GUI app's PATH, plus where Tern's CLI lives.
+    private static func watcherEnvironment() -> [String: String] {
+        var environment = environment()
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        if let tern = executable("tern", override: environment["TERN_BIN"], environment: environment, extra: ["\(home)/.local/bin/tern", "/Applications/Tern.app/Contents/MacOS/tern"]) {
+            environment["TERN_BIN"] = tern
+        }
+        return environment
+    }
+
+    /// `--backend` for the watcher: what it reports reading, else the person's choice, else auto.
+    private var backendArguments: [String] {
+        ["--backend", (backend ?? choice)?.rawValue ?? "auto"]
+    }
+
+    private func launch() {
+        guard shouldRun else { return }
+        let environment = Self.watcherEnvironment()
+        guard let binary = Self.watcher(environment) else {
             error = "The bundled ternwatch is missing. Rebuild Tern Notch, or set TERNWATCH_BIN to a ternwatch executable."
             scheduleRetry()
             return
         }
-        var childEnvironment = environment
-        if let tern = Self.executable("tern", override: environment["TERN_BIN"], environment: environment, extra: ["\(home)/.local/bin/tern", "/Applications/Tern.app/Contents/MacOS/tern"]) {
-            childEnvironment["TERN_BIN"] = tern
-        }
         let child = Process()
+        let stdin = Pipe()
         let stdout = Pipe()
         let stderr = Pipe()
         child.executableURL = URL(fileURLWithPath: binary)
-        child.arguments = ["--json", "--follow"]
-        child.environment = childEnvironment
+        child.arguments = ["--json", "--follow", "--backend", choice?.rawValue ?? "auto"]
+        child.environment = environment
+        child.standardInput = stdin
         child.standardOutput = stdout
         child.standardError = stderr
         let current = UUID()
@@ -190,6 +254,7 @@ final class TernStreamStore: ObservableObject {
             return
         }
         process = child
+        input = stdin
         isRunning = true
         error = nil
         stderr.fileHandleForReading.readabilityHandler = { [weak self] handle in
@@ -223,6 +288,7 @@ final class TernStreamStore: ObservableObject {
                         case .success(let snapshot):
                             self.agents = snapshot.agents
                             self.messages = snapshot.messages
+                            self.backend = snapshot.backend ?? .tern
                             self.error = snapshot.error.map { "ternwatch: \($0)" }
                         case .failure(let error):
                             self.error = "Invalid ternwatch snapshot: \(error.localizedDescription)"
@@ -241,8 +307,8 @@ final class TernStreamStore: ObservableObject {
                 self.isRunning = false
                 self.agents = []
                 self.messages = []
-                if detail.contains("--follow") {
-                    self.error = "ternwatch does not support --follow. Point TERNWATCH_BIN at a current build, or unset it to use the bundled one. \(detail)"
+                if detail.contains("--follow") || detail.contains("--backend") {
+                    self.error = "This ternwatch is too old for Tern Notch. Point TERNWATCH_BIN at a current build, or unset it to use the bundled one. \(detail)"
                 } else {
                     self.error = detail.isEmpty ? "ternwatch stopped (exit \(child.terminationStatus)). Retrying…" : "ternwatch stopped: \(detail)"
                 }
@@ -268,18 +334,19 @@ final class TernStreamStore: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: task)
     }
 
-    private func runAction(_ arguments: [String]) {
-        let environment = Self.environment()
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        guard let tern = Self.executable("tern", override: environment["TERN_BIN"], environment: environment, extra: ["\(home)/.local/bin/tern", "/Applications/Tern.app/Contents/MacOS/tern"]) else {
-            actionError = "Cannot find tern. Install Tern or set TERN_BIN to its executable path."
+    /// Runs `ternwatch <arguments>` against the watched backend; it knows each window's commands.
+    private func runAction(_ arguments: [String], verb: String) {
+        let environment = Self.watcherEnvironment()
+        guard let watcher = Self.watcher(environment) else {
+            actionError = "The bundled ternwatch is missing. Rebuild Tern Notch, or set TERNWATCH_BIN to a ternwatch executable."
             return
         }
         actionError = nil
+        let arguments = backendArguments + arguments
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let child = Process()
             let stderr = Pipe()
-            child.executableURL = URL(fileURLWithPath: tern)
+            child.executableURL = URL(fileURLWithPath: watcher)
             child.arguments = arguments
             child.environment = environment
             child.standardOutput = FileHandle.nullDevice
@@ -290,11 +357,12 @@ final class TernStreamStore: ObservableObject {
                 child.waitUntilExit()
                 guard child.terminationStatus != 0 else { return }
                 let detail = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+                    .replacingOccurrences(of: "Error: ", with: "")
                 DispatchQueue.main.async { [weak self] in
-                    self?.actionError = detail.isEmpty ? "tern \(arguments[0]) failed (exit \(child.terminationStatus))." : "tern \(arguments[0]) failed: \(detail)"
+                    self?.actionError = detail.isEmpty ? "\(verb) failed (exit \(child.terminationStatus))." : "\(verb) failed: \(detail)"
                 }
             } catch {
-                DispatchQueue.main.async { [weak self] in self?.actionError = "Could not run tern \(arguments[0]): \(error.localizedDescription)" }
+                DispatchQueue.main.async { [weak self] in self?.actionError = "Could not run ternwatch: \(error.localizedDescription)" }
             }
         }
     }

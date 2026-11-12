@@ -7,35 +7,9 @@ use std::time::Instant;
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
+use crate::pane::Pane;
+
 const APP_BINARY: &str = "/Applications/Tern.app/Contents/MacOS/tern";
-
-/// One Tern pane, merged from the `sessions` tree and the `panes` list of `tern inspect --json`.
-#[derive(Clone, Debug, Default)]
-pub struct Pane {
-    pub id: u64,
-    pub title: String,
-    pub cwd: String,
-    pub session: String,
-    pub tab: u32,
-    pub tab_name: Option<String>,
-    pub working: bool,
-    pub quiet_ms: u64,
-    /// When `quiet_ms` was sampled; age keeps advancing without querying Tern.
-    pub inspected_at: Option<Instant>,
-    pub session_file: Option<PathBuf>,
-    /// The agent CLI in the foreground when the pane has no omp transcript (`codex`, `claude`,
-    /// `codex (acp)`, …), from `tern process`.
-    pub cli: Option<String>,
-}
-
-impl Pane {
-    pub fn quiet_ms(&self) -> u64 {
-        self.quiet_ms
-            .saturating_add(self.inspected_at.map_or(0, |at| {
-                at.elapsed().as_millis().min(u128::from(u64::MAX)) as u64
-            }))
-    }
-}
 
 /// `TERN_BIN`, then `tern` on `PATH`, then the app bundle.
 pub fn binary() -> String {
@@ -86,6 +60,7 @@ pub fn parse_inspect(root: &Value) -> Vec<Pane> {
                 }
                 panes.push(Pane {
                     id,
+                    address: id.to_string(),
                     title: str_of(block, "title"),
                     cwd: str_of(block, "cwd"),
                     session: session_name.clone(),
@@ -138,61 +113,14 @@ pub fn foreground(bin: &str, pane: u64) -> Option<Vec<String>> {
     )
 }
 
-const AGENT_CLIS: [&str; 14] = [
-    "omp",
-    "pi",
-    "claude",
-    "codex",
-    "gemini",
-    "opencode",
-    "aider",
-    "hermes",
-    "goose",
-    "amp",
-    "cursor-agent",
-    "copilot",
-    "qwen",
-    "crush",
-];
-
-/// Which coding agent a command line runs: `claude`, `codex`, or `codex (acp)` for Tern's ACP
-/// bridge (`tern acp --fork codex:<session>`). Node launchers are matched by their script path.
-pub fn agent_cli(argv: &[String]) -> Option<String> {
-    let base = |arg: &str| arg.rsplit('/').next().unwrap_or(arg).to_string();
-    let program = base(argv.first()?);
-    if program == "tern" && argv.get(1).map(String::as_str) == Some("acp") {
-        let inner = argv
-            .iter()
-            .find_map(|arg| arg.split_once(':').map(|(cli, _)| cli.to_string()));
-        let inner = inner.filter(|cli| AGENT_CLIS.contains(&cli.as_str()));
-        return Some(
-            inner
-                .map(|cli| format!("{cli} (acp)"))
-                .unwrap_or_else(|| "acp".into()),
-        );
-    }
-    if AGENT_CLIS.contains(&program.as_str()) {
-        return Some(program);
-    }
-    if matches!(program.as_str(), "node" | "bun" | "deno") {
-        return argv[1..].iter().find_map(|arg| {
-            AGENT_CLIS
-                .iter()
-                .find(|cli| arg.contains(&format!("/{cli}")))
-                .map(|cli| cli.to_string())
-        });
-    }
-    None
-}
-
 /// Moves Tern's focus to the pane, so the user can work with the agent directly.
-pub fn focus(bin: &str, pane: u64) -> Result<()> {
-    run_quiet(bin, &["focus", &pane.to_string()])
+pub fn focus(bin: &str, pane: &str) -> Result<()> {
+    run_quiet(bin, &["focus", pane])
 }
 
 /// Types `text` into the pane and presses Enter, as `tern run` does.
-pub fn send(bin: &str, pane: u64, text: &str) -> Result<()> {
-    run_quiet(bin, &["run", &pane.to_string(), text])
+pub fn send(bin: &str, pane: &str, text: &str) -> Result<()> {
+    run_quiet(bin, &["run", pane, text])
 }
 
 fn run_quiet(bin: &str, args: &[&str]) -> Result<()> {
@@ -229,21 +157,6 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn quiet_age_advances_without_another_inspection() {
-        let pane = Pane {
-            quiet_ms: 12,
-            inspected_at: Some(Instant::now() - std::time::Duration::from_secs(2)),
-            ..Pane::default()
-        };
-        assert!(pane.quiet_ms() >= 2012);
-        let saturated = Pane {
-            quiet_ms: u64::MAX,
-            ..pane
-        };
-        assert_eq!(saturated.quiet_ms(), u64::MAX);
-    }
-
-    #[test]
     fn merges_live_state_into_blocks_and_skips_browser_blocks() {
         let root = json!({
             "sessions": [{"name": "Chaos", "tabs": [{"number": 2, "name": "rwa", "blocks": [
@@ -259,30 +172,5 @@ mod tests {
         assert_eq!((pane.id, pane.tab, pane.title.as_str()), (7, 2, "omp: new"));
         assert!(pane.working);
         assert_eq!(pane.session_file.as_deref(), Some(Path::new("/s/a.jsonl")));
-    }
-
-    #[test]
-    fn names_agent_clis_including_acp_and_node_launchers() {
-        let argv = |args: &[&str]| args.iter().map(|a| a.to_string()).collect::<Vec<_>>();
-        let acp = argv(&[
-            "/Applications/Tern.app/Contents/MacOS/tern",
-            "acp",
-            "--fork",
-            "codex:01a1",
-            "--handoff",
-            "0:1",
-        ]);
-        assert_eq!(agent_cli(&acp).as_deref(), Some("codex (acp)"));
-        assert_eq!(
-            agent_cli(&argv(&["claude", "--resume"])).as_deref(),
-            Some("claude")
-        );
-        let node = argv(&[
-            "node",
-            "/opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/cli.js",
-        ]);
-        assert_eq!(agent_cli(&node).as_deref(), Some("claude"));
-        assert_eq!(agent_cli(&argv(&["/bin/zsh", "-l"])), None);
-        assert_eq!(agent_cli(&argv(&["tern", "ls"])), None);
     }
 }

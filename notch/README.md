@@ -8,7 +8,7 @@ Rest the pointer on the notch for a moment to unfold it from the top edge of the
 
 ## The open notch
 
-The header beside the camera shows the watcher state and how many agents are working and idle on the left. On the right are the **Subagents** switch, Restart watcher, Collapse, and Quit (the power button). Cmd-Q also quits while the notch has keyboard focus.
+The header beside the camera starts with the window being watched, **TERN** or **HERDR**; click it to watch the other one. The choice is kept between launches; until you choose, the watcher picks Tern when it runs, else herdr. Next come the watcher state and how many agents are working, blocked (herdr only), and idle. On the right are the **Subagents** switch (Tern only), Restart watcher, Collapse, and Quit (the power button). Cmd-Q also quits while the notch has keyboard focus.
 
 Below the header is a strip of recent conversations. It starts with **Message**, which lets you write to any agent (see below), then **Live**. Each conversation is a pair of agents, and each chip shows both agents' faces and names with the message count between them, newest first. A chip glows briefly when a new message arrives in its conversation. **Live** follows the conversation with the latest message. Click another chip to pin that conversation in both the open and collapsed notch. Click **Live** to follow the latest conversation again.
 
@@ -26,14 +26,16 @@ Click a face or name in the conversation header to see that agent's details, its
 
 Message reactions and traffic glows run only for messages sent in the last few seconds, and only after the first snapshot. Loaded history, reconnects, and delivery-state updates never trigger them. The collapsed working cycle continues independently while an agent reports working, and stops when it becomes idle or the notch opens. Idle faces have no repeating animation task. Reduce Motion turns off working motion, blinking, traffic glow changes, and face reactions.
 
+herdr reports agents and their state, but no message text. While watching herdr, the conversation strip holds only **Message**, and a **HERDR AGENTS** tree takes the transcript's place: each agent with its CLI, folder, time quiet, and herdr's own state word (`working`, `idle`, `blocked`, `done`, or `error`). Agents started by another agent are indented under it. Click an agent for its details: Focus shows its terminal in the Herdr window, the copy button copies its hc address (such as `vps/t7`), and the composer sends text through `hc send`. Focus needs the Herdr window to be open; a failed action appears as a banner.
+
 ## Requirements
 
 - macOS 14 or later, Xcode 15 or later, and Rust (`cargo`) to build.
-- Tern and its `tern` command-line executable.
+- Tern and its `tern` command-line executable, or herdr with herdr-core's `hc` (and `herdr-app` to focus terminals).
 
 The app ships its own `ternwatch`. Its build compiles the watcher from the repository root (`cargo build --release --locked`) and copies it into `TernNotch.app/Contents/MacOS/`, so the app always runs the watcher from the same checkout. The build script adds `~/.cargo/bin`, `/opt/homebrew/bin`, and `/usr/local/bin` to `PATH` to find `cargo`. For development, set `TERNWATCH_BIN` to another `ternwatch` executable in the Xcode scheme's Run environment or in the launch environment; it then replaces the bundled one.
 
-The app looks for `tern` on its inherited `PATH`, plus `~/.local/bin`, `~/.cargo/bin`, `/opt/homebrew/bin`, and `/usr/local/bin`. It also checks `/Applications/Tern.app/Contents/MacOS/tern`. Set `TERN_BIN` to override it. A graphical app does not necessarily inherit your shell's PATH.
+The app looks for `tern` on its inherited `PATH`, plus `~/.local/bin`, `~/.cargo/bin`, `/opt/homebrew/bin`, and `/usr/local/bin`. It also checks `/Applications/Tern.app/Contents/MacOS/tern`. Set `TERN_BIN` to override it. The watcher looks for herdr's `hc` and `herdr-app` on that same `PATH`, then in `~/.local/bin/hc` and `/Applications/Herdr.app`; set `HC_BIN` or `HERDR_APP_BIN` to override them. A graphical app does not necessarily inherit your shell's PATH.
 
 ## Build and run
 

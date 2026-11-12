@@ -15,7 +15,8 @@ use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde_json::Value;
 
 use crate::model::PaneId;
-use crate::tern::{self, Pane};
+use crate::pane::{Pane, agent_cli};
+use crate::tern;
 use crate::transcript::{self, Event, Tail};
 
 pub enum Update {
@@ -477,7 +478,7 @@ impl Collector {
             if pane.session_file.is_none() {
                 if check_clis || !self.clis.contains_key(&pane.id) {
                     let cli = tern::foreground(&self.options.bin, pane.id)
-                        .and_then(|argv| tern::agent_cli(&argv));
+                        .and_then(|argv| agent_cli(&argv));
                     self.clis.insert(pane.id, cli);
                 }
                 pane.cli = self.clis.get(&pane.id).cloned().flatten();

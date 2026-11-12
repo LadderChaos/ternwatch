@@ -388,11 +388,12 @@ private struct NotchRootView: View {
         let gap = metrics.cameraWidth > 0 ? metrics.cameraWidth : NotchStyle.fauxCameraGap
         if expanded {
             let roster = TernRoster(store.agents)
+            let blocked = store.agents.filter { $0.open && $0.status == "blocked" }.count
             HStack(spacing: 0) {
                 HStack(spacing: 8) {
-                    Text("TERN").font(.pixel()).foregroundStyle(ternAccent).fixedSize()
+                    backendSwitch
                     liveBadge
-                    Text("\(roster.active.count) working · \(roster.idle.count) idle")
+                    Text("\(roster.active.count) working · \(blocked > 0 ? "\(blocked) blocked · " : "")\(roster.idle.count - blocked) idle")
                         .font(.pixel())
                         .foregroundStyle(Color.white.opacity(0.62))
                         .lineLimit(1)
@@ -402,7 +403,7 @@ private struct NotchRootView: View {
                 Color.clear.frame(width: gap)
                 HStack(spacing: 8) {
                     Spacer(minLength: 0)
-                    subagentsToggle
+                    if store.backend != .herdr { subagentsToggle }
                     iconButton(.refresh, label: "Restart watcher") { store.restart() }
                     iconButton(.chevronUp, label: "Collapse Tern Notch", action: collapse)
                     iconButton(.power, label: "Quit Tern Notch") { NSApplication.shared.terminate(nil) }
@@ -418,6 +419,25 @@ private struct NotchRootView: View {
             CollapsedHeader(store: store, traffic: traffic, state: viewState, gap: gap, height: metrics.headerHeight, action: toggle)
                 .transition(.opacity)
         }
+    }
+
+    /// The window's name; a click watches the other one. herdr shows agents and their state, but no messages.
+    private var backendSwitch: some View {
+        let current = store.backend ?? store.choice ?? .tern
+        return Button { store.choose(current.other) } label: {
+            Text(current.title)
+                .font(.pixel())
+                .foregroundStyle(ternAccent)
+                .padding(.horizontal, 5)
+                .frame(height: 20)
+                .background(PixelBox(1).fill(ternAccent.opacity(0.12)))
+                .contentShape(PixelBox(1))
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+        .help("Watching \(current.name). Click to watch \(current.other.name).")
+        .accessibilityLabel("Watching \(current.name)")
+        .accessibilityHint("Switches to \(current.other.name)")
     }
 
     /// Off: conversations are between top-level panes only. On: each subagent takes part on its own.
@@ -491,7 +511,7 @@ private struct CollapsedHeader: View {
         .buttonStyle(.plain)
         .accessibilityLabel("Open Tern Notch")
         .accessibilityValue(status(roster, pair))
-        .help("Tern · \(status(roster, pair))")
+        .help("\((store.backend ?? store.choice ?? .tern).title) · \(status(roster, pair))")
     }
 
     private var offline: Bool { !store.isRunning || store.error != nil }

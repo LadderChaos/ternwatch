@@ -1,13 +1,14 @@
 # ternwatch
 
-A live terminal map of coding agents and orchestration traffic in Stencil's Tern.
-Uses the official `tern` CLI and local omp transcripts. No Tern plugin or relay service is required.
+A live terminal map of coding agents and orchestration traffic in Stencil's Tern,
+or of the agents in a herdr window. Uses the official `tern` CLI and local omp
+transcripts, or herdr-core's `hc`. No plugin or relay service is required.
 
 ![ternwatch showing four omp agents: a lead sends tasks to API, web and docs agents, and their replies arrive in the message feed](assets/ternwatch.png)
 
 ## Run
 
-Requires Rust and a running Tern daemon. Build and start from this directory:
+Requires Rust and a running Tern daemon or herdr core. Build and start from this directory:
 
 ```sh
 cargo run --release
@@ -45,6 +46,16 @@ change. For panes without omp transcripts, those fields refresh on the next
 supported pane, title, directory, or layout event. omp transcript writes also
 trigger refreshes. This avoids polling but can leave transcriptless panes stale
 between events.
+
+### herdr
+
+With `--backend herdr`, ternwatch reads a persistent `hc events --json`
+subscription. It shows each terminal that runs an agent, the state the agent
+reports (`working`, `idle`, `blocked`, `done` or `error`) and which agent started
+which. herdr reports no message text, so the feed stays empty and no packets
+move. Addresses are hc terminal addresses, such as `t7` or `vps/t7` for a remote
+core. `m` and `--send` use `hc send`; Enter and `--focus` use `herdr-app` and need
+the Herdr window to be open.
 
 ## Keys
 
@@ -85,14 +96,28 @@ ternwatch --json --follow
 ternwatch --frame 180x50
 ternwatch --no-animation
 ternwatch --all-panes --history 8
+ternwatch --backend herdr --json
+ternwatch --send 7 "run the tests"
+ternwatch --backend herdr --focus vps/t7
 ```
+
+`--backend` takes `tern`, `herdr` or `auto` (the default). `auto` uses the window
+ternwatch runs in, else a running Tern, else a running herdr core. Every JSON
+snapshot names its `backend`. Each agent has an `address` (the Tern pane number,
+or the hc terminal address), a `status` (`working` or `idle`, or herdr's
+`blocked`, `done` or `error`), and a nullable `parent` (the herdr agent that
+started it). `--send ADDRESS TEXT` types the text into that pane and presses
+Enter; `--focus ADDRESS` shows the pane in its window. Both exit nonzero with an
+error on stderr when the backend refuses.
 
 `--json` prints agents and messages without opening the TUI. Add `--follow` to
 stream an initial snapshot and subsequent updates as newline-delimited JSON: each
 line is a complete object with the same `agents` and `messages` fields as the
 single snapshot. The stream combines available updates into the latest snapshot,
 flushes each line, and reports watcher errors on stderr while reconnecting where
-possible. `--follow` requires `--json`.
+possible. `--follow` requires `--json`. When stdin is a pipe, `--follow` exits once
+the pipe closes, after stopping its `tern events` or `hc events` command; a parent
+that holds the pipe's write end thereby stops the watcher even if it crashes.
 
 Every JSON message has an `id` (a `u64` model sequence, stable within a running
 process) and nullable `repeat_of` (the root message's `id`). A possible repeat is
@@ -112,8 +137,11 @@ IDs are not persistent across process restarts or different history loads.
 4 MB). `--no-animation` disables moving packets and spinners.
 
 Set `TERN_BIN` to select a Tern executable. Otherwise lookup uses `PATH`, then the
-macOS app bundle. Set `NO_COLOR` to disable color. Tern's CLI selects its window
-from the calling pane's environment, or its default window when run outside Tern.
+macOS app bundle. `HC_BIN` selects herdr-core's `hc` (default: `PATH`, then
+`~/.local/bin/hc`), and `HERDR_APP_BIN` the `herdr-app` CLI used to focus panes
+(default: `PATH`, then `Herdr.app`). Set `NO_COLOR` to disable color. Tern's CLI
+selects its window from the calling pane's environment, or its default window when
+run outside Tern.
 
 ## Delivery and coverage
 
@@ -136,13 +164,15 @@ visible for up to an hour. A closed pane is named from the `From <pane> (<title>
 envelope of a message it sent; one that only received messages shows its pane ID.
 
 The watcher does not alter agent configuration. Pane writes occur only when you
-explicitly compose text with `m`; Enter on a card changes focus in Tern.
+explicitly compose text with `m` or run `--send`; Enter on a card changes focus in
+Tern or herdr.
 
 ## Tern Notch
 
 `notch/` holds Tern Notch, a macOS app that shows the same agents and messages in
 the MacBook camera notch. It runs `ternwatch --json --follow` and bundles the watcher
-built from this repository. See [notch/README.md](notch/README.md).
+built from this repository. Its header switches between Tern and herdr. See
+[notch/README.md](notch/README.md).
 
 ![Tern Notch showing a conversation between two agents](notch/assets/tern-notch.png)
 
