@@ -817,7 +817,7 @@ mod tests {
         impl Fixture {
             fn new(reconnect: bool) -> Self {
                 let dir = std::env::temp_dir().join(format!(
-                    "ternwatch-events-{}-{}",
+                    "muster-events-{}-{}",
                     std::process::id(),
                     NEXT.fetch_add(1, Ordering::Relaxed)
                 ));

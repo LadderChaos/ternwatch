@@ -748,6 +748,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "muster"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "kqueue",
+ "notify",
+ "ratatui",
+ "regex",
+ "serde",
+ "serde_json",
+ "unicode-width",
+]
+
+[[package]]
 name = "nix"
 version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1568,21 +1583,6 @@ dependencies = [
  "wezterm-dynamic",
  "wezterm-input-types",
  "winapi",
-]
-
-[[package]]
-name = "ternwatch"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "kqueue",
- "notify",
- "ratatui",
- "regex",
- "serde",
- "serde_json",
- "unicode-width",
 ]
 
 [[package]]

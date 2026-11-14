@@ -2,7 +2,7 @@ import AppKit
 import Combine
 import SwiftUI
 
-let ternAccent = Color(red: 0.36, green: 0.86, blue: 0.92)
+let musterAccent = Color(red: 0.36, green: 0.86, blue: 0.92)
 
 /// Identity hues ordered so neighbouring slots contrast. Pure red is left out: it marks failed messages.
 private let agentPalette: [Color] = [190, 28, 268, 140, 335, 52, 218, 300, 165, 12, 245, 88].map {
@@ -16,7 +16,7 @@ private let agentPalette: [Color] = [190, 28, 268, 140, 335, 52, 218, 300, 165, 
 enum AgentColors {
     private static var slots: [UInt64: Int] = [:]
 
-    static func sync(active: [TernAgent], idle: [TernAgent]) {
+    static func sync(active: [MusterAgent], idle: [MusterAgent]) {
         let live = Set((active + idle).map(\.pane))
         slots = slots.filter { live.contains($0.key) }
         var activeSlots = Set<Int>()
@@ -78,55 +78,55 @@ func agentHue(_ pane: UInt64, subagent: String? = nil) -> Color {
 
 // MARK: - Preferences
 
-enum TernPreferences {
+enum MusterPreferences {
     /// `@AppStorage` key: subagents take part in conversations on their own. Off by default.
-    static let showSubagents = "ternShowSubagents"
+    static let showSubagents = "showSubagents"
     /// `tern` or `herdr`: the window to watch. Unset lets the watcher pick: Tern when it runs, else herdr.
-    static let backend = "ternBackend"
+    static let backend = "backend"
 }
 
 extension UserDefaults {
-    /// KVO-observable mirror of `TernPreferences.showSubagents`; the property name must equal the key.
-    @objc dynamic var ternShowSubagents: Bool { bool(forKey: TernPreferences.showSubagents) }
+    /// KVO-observable mirror of `MusterPreferences.showSubagents`; the property name must equal the key.
+    @objc dynamic var showSubagents: Bool { bool(forKey: MusterPreferences.showSubagents) }
 }
 
 // MARK: - Roster
 
 /// Working agents (or orchestrators waiting on running subagents) first, then idle, then closed.
 /// Order inside each group is stable so colors and counts do not shuffle on every snapshot.
-struct TernRoster {
-    let active: [TernAgent]
-    let idle: [TernAgent]
-    private let byPane: [UInt64: TernAgent]
+struct MusterRoster {
+    let active: [MusterAgent]
+    let idle: [MusterAgent]
+    private let byPane: [UInt64: MusterAgent]
 
-    init(_ agents: [TernAgent]) {
-        let stable: (TernAgent, TernAgent) -> Bool = { $0.tab == $1.tab ? $0.pane < $1.pane : $0.tab < $1.tab }
-        let isActive: (TernAgent) -> Bool = { $0.open && ($0.working || $0.subagents.contains(where: \.running)) }
+    init(_ agents: [MusterAgent]) {
+        let stable: (MusterAgent, MusterAgent) -> Bool = { $0.tab == $1.tab ? $0.pane < $1.pane : $0.tab < $1.tab }
+        let isActive: (MusterAgent) -> Bool = { $0.open && ($0.working || $0.subagents.contains(where: \.running)) }
         active = agents.filter(isActive).sorted(by: stable)
         idle = agents.filter { $0.open && !isActive($0) }.sorted(by: stable) + agents.filter { !$0.open }.sorted(by: stable)
         AgentColors.sync(active: active, idle: idle)
         byPane = Dictionary(agents.map { ($0.pane, $0) }, uniquingKeysWith: { first, _ in first })
     }
 
-    func agent(_ pane: UInt64) -> TernAgent? { byPane[pane] }
+    func agent(_ pane: UInt64) -> MusterAgent? { byPane[pane] }
 
     /// Short name: the subagent's own name, the agent's readable name, or "External" for panes outside the stream.
-    func name(_ endpoint: TernEndpoint) -> String {
+    func name(_ endpoint: MusterEndpoint) -> String {
         endpoint.subagent ?? agent(endpoint.pane).map(agentName) ?? "External"
     }
 
     /// Name qualified by the parent pane for subagents ("parent/subagent"), for help text and VoiceOver.
-    func fullName(_ endpoint: TernEndpoint) -> String {
+    func fullName(_ endpoint: MusterEndpoint) -> String {
         let parent = agent(endpoint.pane).map(agentName) ?? "External"
         return endpoint.subagent.map { "\(parent)/\($0)" } ?? parent
     }
 
-    func hue(_ endpoint: TernEndpoint) -> Color {
+    func hue(_ endpoint: MusterEndpoint) -> Color {
         agent(endpoint.pane) == nil ? Color.white.opacity(0.55) : agentHue(endpoint.pane, subagent: endpoint.subagent)
     }
 
     /// Reported state only: a subagent works while its parent lists it as running.
-    func mood(_ endpoint: TernEndpoint) -> AgentMood {
+    func mood(_ endpoint: MusterEndpoint) -> AgentMood {
         guard let agent = agent(endpoint.pane) else { return .closed }
         guard let name = endpoint.subagent else { return agentMood(agent) }
         if !agent.open { return .closed }
@@ -137,7 +137,7 @@ struct TernRoster {
 // MARK: - Conversations
 
 /// One conversation participant: a top-level pane, or one of its subagents while subagents are shown.
-struct TernEndpoint: Hashable {
+struct MusterEndpoint: Hashable {
     let pane: UInt64
     /// Nil for the pane itself; never empty.
     let subagent: String?
@@ -147,31 +147,31 @@ struct TernEndpoint: Hashable {
         self.subagent = subagent.flatMap { $0.isEmpty ? nil : $0 }
     }
 
-    init(_ node: TernNode) {
+    init(_ node: MusterNode) {
         self.init(pane: node.pane, subagent: node.subagent)
     }
 
-    fileprivate func precedes(_ other: TernEndpoint) -> Bool {
+    fileprivate func precedes(_ other: MusterEndpoint) -> Bool {
         pane != other.pane ? pane < other.pane : (subagent ?? "") < (other.subagent ?? "")
     }
 }
 
 /// The messages exchanged between one pair of endpoints, oldest to newest.
-struct TernConversation: Identifiable {
+struct MusterConversation: Identifiable {
     /// Unordered endpoint pair: messages A → B and B → A belong to one conversation.
     struct ID: Hashable {
-        let first: TernEndpoint
-        let second: TernEndpoint
+        let first: MusterEndpoint
+        let second: MusterEndpoint
 
-        init(_ a: TernEndpoint, _ b: TernEndpoint) {
+        init(_ a: MusterEndpoint, _ b: MusterEndpoint) {
             (first, second) = a.precedes(b) ? (a, b) : (b, a)
         }
     }
 
     let id: ID
     /// Sender of the earliest loaded message; the sides never swap as replies arrive.
-    let left: TernEndpoint
-    let right: TernEndpoint
+    let left: MusterEndpoint
+    let right: MusterEndpoint
     /// Oldest to newest; never empty.
     fileprivate(set) var entries: [TrafficEntry]
     fileprivate(set) var groups: [TrafficGroup] = []
@@ -192,20 +192,20 @@ struct TernConversation: Identifiable {
     /// The conversation a message from `from` to `to` belongs to, or nil when the filter drops it.
     /// With subagents hidden, conversations are between distinct top-level panes only; with them
     /// shown, any two distinct endpoints, so a pane can talk to its own subagent.
-    static func id(_ from: TernEndpoint, _ to: TernEndpoint, subagents: Bool) -> ID? {
+    static func id(_ from: MusterEndpoint, _ to: MusterEndpoint, subagents: Bool) -> ID? {
         if !subagents && (from.subagent != nil || to.subagent != nil || from.pane == to.pane) { return nil }
         return from == to ? nil : ID(from, to)
     }
 
     /// Groups traffic (oldest to newest) into conversations, newest first, and counts the messages
     /// dropped only because an endpoint is a subagent while subagents are hidden.
-    static func index(_ entries: [TrafficEntry], subagents: Bool) -> (conversations: [TernConversation], hiddenSubagentMessages: Int) {
-        var conversations: [TernConversation] = []
+    static func index(_ entries: [TrafficEntry], subagents: Bool) -> (conversations: [MusterConversation], hiddenSubagentMessages: Int) {
+        var conversations: [MusterConversation] = []
         var positions: [ID: Int] = [:]
         var hidden = 0
         for (index, entry) in entries.enumerated() {
-            let from = TernEndpoint(entry.item.from)
-            let to = TernEndpoint(entry.item.to)
+            let from = MusterEndpoint(entry.item.from)
+            let to = MusterEndpoint(entry.item.to)
             if !subagents && (from.subagent != nil || to.subagent != nil) { hidden += 1 }
             guard let id = id(from, to, subagents: subagents) else { continue }
             if let position = positions[id] {
@@ -213,7 +213,7 @@ struct TernConversation: Identifiable {
                 conversations[position].latestIndex = index
             } else {
                 positions[id] = conversations.count
-                conversations.append(TernConversation(id: id, left: from, right: to, entries: [entry], latestIndex: index))
+                conversations.append(MusterConversation(id: id, left: from, right: to, entries: [entry], latestIndex: index))
             }
         }
         for index in conversations.indices {
@@ -239,8 +239,8 @@ struct TrafficGroup: Identifiable {
         for entry in entries {
             var root = entry
             if let repeatOf = entry.item.repeatOf, let candidate = roots[repeatOf],
-               TernEndpoint(candidate.item.from) == TernEndpoint(entry.item.from),
-               TernEndpoint(candidate.item.to) == TernEndpoint(entry.item.to) {
+               MusterEndpoint(candidate.item.from) == MusterEndpoint(entry.item.from),
+               MusterEndpoint(candidate.item.to) == MusterEndpoint(entry.item.to) {
                 root = candidate
             }
             if let index = positions[root.id] {
@@ -259,7 +259,7 @@ struct TrafficGroup: Identifiable {
 /// Owns message identity, fresh-arrival detection, and the conversation index for both notch
 /// states, so opening the notch never replays loaded history and delivery updates keep their
 /// identity instead of reading as new traffic.
-final class TernTraffic: ObservableObject {
+final class MusterTraffic: ObservableObject {
     static let pulseDuration: TimeInterval = 1.4
 
     /// Oldest to newest.
@@ -269,10 +269,10 @@ final class TernTraffic: ObservableObject {
     /// Increments only when fresh traffic arrives; drives insertion animation.
     @Published private(set) var arrivals = 0
     /// Conversations under the Subagents filter, newest first. Rebuilt only when `entries` or the filter change.
-    @Published private(set) var conversations: [TernConversation] = []
+    @Published private(set) var conversations: [MusterConversation] = []
     /// Messages hidden only because an endpoint is a subagent; 0 while subagents are shown.
     @Published private(set) var hiddenSubagentMessages = 0
-    /// Current value of the Subagents filter (`TernPreferences.showSubagents`).
+    /// Current value of the Subagents filter (`MusterPreferences.showSubagents`).
     private(set) var showSubagents = false
 
     private var observed: [TrafficEntry.ID: Int64] = [:]
@@ -281,7 +281,7 @@ final class TernTraffic: ObservableObject {
     private var expiry: DispatchWorkItem?
     private var subscriptions: Set<AnyCancellable> = []
 
-    init(store: TernStreamStore) {
+    init(store: MusterStreamStore) {
         store.$messages
             .sink { [weak self, weak store] messages in
                 self?.rebuild(messages, hasAgents: !(store?.agents.isEmpty ?? true))
@@ -294,7 +294,7 @@ final class TernTraffic: ObservableObject {
             }
             .store(in: &subscriptions)
         $entries
-            .combineLatest(UserDefaults.standard.publisher(for: \.ternShowSubagents).removeDuplicates())
+            .combineLatest(UserDefaults.standard.publisher(for: \.showSubagents).removeDuplicates())
             .sink { [weak self] entries, subagents in
                 self?.reindex(entries, subagents: subagents)
             }
@@ -303,35 +303,35 @@ final class TernTraffic: ObservableObject {
 
     func isFresh(_ id: TrafficEntry.ID) -> Bool { pulses.contains { $0.entry == id } }
 
-    func isFresh(_ id: TernConversation.ID) -> Bool { pulses.contains { conversationID(of: $0) == id } }
+    func isFresh(_ id: MusterConversation.ID) -> Bool { pulses.contains { conversationID(of: $0) == id } }
 
     /// The pinned conversation while it exists, otherwise the one with the latest message.
-    func conversation(pinned: TernConversation.ID?) -> TernConversation? {
+    func conversation(pinned: MusterConversation.ID?) -> MusterConversation? {
         pinned.flatMap { id in conversations.first { $0.id == id } } ?? conversations.first
     }
 
-    func conversationID(of pulse: TrafficPulse) -> TernConversation.ID? {
-        TernConversation.id(TernEndpoint(pane: pulse.from, subagent: pulse.fromSubagent),
-                            TernEndpoint(pane: pulse.to, subagent: pulse.toSubagent), subagents: showSubagents)
+    func conversationID(of pulse: TrafficPulse) -> MusterConversation.ID? {
+        MusterConversation.id(MusterEndpoint(pane: pulse.from, subagent: pulse.fromSubagent),
+                            MusterEndpoint(pane: pulse.to, subagent: pulse.toSubagent), subagents: showSubagents)
     }
 
     /// A fresh message from this endpoint is in flight. Pulses expire, so this is finite.
-    func speaking(_ endpoint: TernEndpoint) -> Bool {
+    func speaking(_ endpoint: MusterEndpoint) -> Bool {
         pulses.contains { matches(pane: $0.from, subagent: $0.fromSubagent, endpoint) }
     }
 
     /// A fresh message to this endpoint just arrived.
-    func listening(_ endpoint: TernEndpoint) -> Bool {
+    func listening(_ endpoint: MusterEndpoint) -> Bool {
         pulses.contains { matches(pane: $0.to, subagent: $0.toSubagent, endpoint) }
     }
 
     /// With subagents hidden a pane speaks for its subagents too; shown, each endpoint is its own.
-    private func matches(pane: UInt64, subagent: String?, _ endpoint: TernEndpoint) -> Bool {
+    private func matches(pane: UInt64, subagent: String?, _ endpoint: MusterEndpoint) -> Bool {
         pane == endpoint.pane && (!showSubagents || subagent == endpoint.subagent)
     }
 
     private func reindex(_ entries: [TrafficEntry], subagents: Bool) {
-        let index = TernConversation.index(entries, subagents: subagents)
+        let index = MusterConversation.index(entries, subagents: subagents)
         showSubagents = subagents
         conversations = index.conversations
         if hiddenSubagentMessages != index.hiddenSubagentMessages { hiddenSubagentMessages = index.hiddenSubagentMessages }
@@ -345,7 +345,7 @@ final class TernTraffic: ObservableObject {
         expiry = nil
         if !pulses.isEmpty { pulses.removeAll() }
     }
-    private func rebuild(_ messages: [TernMessage], hasAgents: Bool) {
+    private func rebuild(_ messages: [MusterMessage], hasAgents: Bool) {
         let now = Date()
         var occurrences: [TrafficKey: Int] = [:]
         let next = messages.enumerated().map { offset, item in
@@ -394,7 +394,7 @@ final class TernTraffic: ObservableObject {
         scheduleExpiry()
     }
 
-    private static func subagent(_ node: TernNode) -> String? {
+    private static func subagent(_ node: MusterNode) -> String? {
         node.subagent.flatMap { $0.isEmpty ? nil : $0 }
     }
 
@@ -406,8 +406,8 @@ final class TernTraffic: ObservableObject {
                 || left.item.repeatOf != right.item.repeatOf || left.item.sentMs != right.item.sentMs
                 || left.item.text != right.item.text || left.item.kind != right.item.kind
                 || left.item.reply != right.item.reply || left.item.deliveryObservable != right.item.deliveryObservable
-                || TernEndpoint(left.item.from) != TernEndpoint(right.item.from)
-                || TernEndpoint(left.item.to) != TernEndpoint(right.item.to)
+                || MusterEndpoint(left.item.from) != MusterEndpoint(right.item.from)
+                || MusterEndpoint(left.item.to) != MusterEndpoint(right.item.to)
         }
     }
 
@@ -427,9 +427,9 @@ final class TernTraffic: ObservableObject {
 }
 
 /// Pinned conversation, selection, and draft survive collapsing the notch.
-final class TernViewState: ObservableObject {
+final class MusterViewState: ObservableObject {
     /// Conversation shown in both notch states; nil follows the conversation with the latest message.
-    @Published var pinned: TernConversation.ID?
+    @Published var pinned: MusterConversation.ID?
     @Published var selectedPane: UInt64?
     @Published var selectedMessage: TrafficEntry.ID?
     @Published var expandedReceipts: Set<TrafficEntry.ID> = []
@@ -453,10 +453,10 @@ final class TernViewState: ObservableObject {
 
 /// The open notch: a strip of recent conversations, then the shown conversation as two agents
 /// facing each other above a mirrored transcript, or an agent or message detail.
-struct TernView: View {
-    @ObservedObject var store: TernStreamStore
-    @ObservedObject var traffic: TernTraffic
-    @ObservedObject var state: TernViewState
+struct MusterView: View {
+    @ObservedObject var store: MusterStreamStore
+    @ObservedObject var traffic: MusterTraffic
+    @ObservedObject var state: MusterViewState
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var copied: String?
     @FocusState private var composing: Bool
@@ -469,7 +469,7 @@ struct TernView: View {
     private let chipLimit = 12
 
     var body: some View {
-        let roster = TernRoster(store.agents)
+        let roster = MusterRoster(store.agents)
         let conversation = traffic.conversation(pinned: state.pinned)
         VStack(alignment: .leading, spacing: 8) {
             if let error = store.error { banner("Watcher", error, offerRestart: true) }
@@ -493,7 +493,7 @@ struct TernView: View {
 
     // MARK: Conversation switcher
 
-    private func switcher(_ roster: TernRoster, shown: TernConversation?) -> some View {
+    private func switcher(_ roster: MusterRoster, shown: MusterConversation?) -> some View {
         var chips = Array(traffic.conversations.prefix(chipLimit))
         if let shown = shown, !chips.contains(where: { $0.id == shown.id }) { chips.append(shown) }
         return ScrollView(.horizontal) {
@@ -529,7 +529,7 @@ struct TernView: View {
     }
 
     /// Opens a pixel list of every agent in the stream, with or without a conversation.
-    private func messageMenu(_ roster: TernRoster) -> some View {
+    private func messageMenu(_ roster: MusterRoster) -> some View {
         let selected = state.pickingRecipient || (state.selectedPane != nil && state.selectedMessage == nil)
         return Button {
             withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) { state.pickingRecipient.toggle() }
@@ -541,8 +541,8 @@ struct TernView: View {
             .foregroundStyle(selected ? Color.white : Color.white.opacity(0.6))
             .padding(.horizontal, 9)
             .frame(height: 24)
-            .background(PixelBox(1).fill(selected ? ternAccent.opacity(0.18) : Color.white.opacity(0.06)))
-            .overlay(PixelBox(1).strokeBorder(ternAccent.opacity(selected ? 0.55 : 0), lineWidth: 1))
+            .background(PixelBox(1).fill(selected ? musterAccent.opacity(0.18) : Color.white.opacity(0.06)))
+            .overlay(PixelBox(1).strokeBorder(musterAccent.opacity(selected ? 0.55 : 0), lineWidth: 1))
             .contentShape(PixelBox(1))
         }
         .buttonStyle(.plain)
@@ -554,7 +554,7 @@ struct TernView: View {
 
     /// Recipient rows, working agents first; closed panes are listed but cannot be chosen.
     /// Choosing one opens its detail with the composer focused.
-    private func recipientList(_ roster: TernRoster) -> some View {
+    private func recipientList(_ roster: MusterRoster) -> some View {
         let agents = roster.active + roster.idle
         return VStack(alignment: .leading, spacing: 6) {
             Text("MESSAGE WHICH AGENT?").font(.pixel()).foregroundStyle(Color.white.opacity(0.45))
@@ -570,7 +570,7 @@ struct TernView: View {
         .transition(.opacity)
     }
 
-    private func recipientRow(_ agent: TernAgent) -> some View {
+    private func recipientRow(_ agent: MusterAgent) -> some View {
         let hue = agentHue(agent.pane)
         let status = agent.open ? stateWord(agent) : "closed"
         return Button {
@@ -599,7 +599,7 @@ struct TernView: View {
     }
 
     /// Mirrored like the header: left participant, message count, right participant.
-    private func conversationChip(_ conversation: TernConversation, _ roster: TernRoster, shown: Bool) -> some View {
+    private func conversationChip(_ conversation: MusterConversation, _ roster: MusterRoster, shown: Bool) -> some View {
         let pinned = state.pinned == conversation.id
         let fresh = !reduceMotion && traffic.isFresh(conversation.id)
         let leftHue = roster.hue(conversation.left)
@@ -646,7 +646,7 @@ struct TernView: View {
 
     // MARK: Detail
 
-    private func detail(_ roster: TernRoster, _ conversation: TernConversation?) -> some View {
+    private func detail(_ roster: MusterRoster, _ conversation: MusterConversation?) -> some View {
         let entry = state.selectedMessage.flatMap { id in traffic.entries.first { $0.id == id } }
         let agent = state.selectedPane.flatMap { roster.agent($0) }
         let mode: DetailMode = entry.map { DetailMode.message($0.id) } ?? agent.map { DetailMode.agent($0.pane) }
@@ -673,17 +673,17 @@ struct TernView: View {
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: mode)
     }
 
-    private func emptyState(_ roster: TernRoster) -> some View {
+    private func emptyState(_ roster: MusterRoster) -> some View {
         let working = roster.active.count
         let hidden = traffic.hiddenSubagentMessages
         return VStack(spacing: 8) {
             PixelIcon(glyph: store.isRunning ? .chat : .bolt, scale: 2)
-                .foregroundStyle(ternAccent)
+                .foregroundStyle(musterAccent)
             Text(!store.isRunning ? "Watcher offline" : store.backend == .herdr ? "No herdr agents yet" : "No conversations yet")
                 .font(.pixel())
             Group {
                 if !store.isRunning {
-                    Text("Tern Notch retries every 5 seconds.")
+                    Text("Muster Notch retries every 5 seconds.")
                 } else if store.agents.isEmpty {
                     Text("Waiting for agents.")
                 } else {
@@ -693,7 +693,7 @@ struct TernView: View {
             .font(.pixel()).foregroundStyle(Color.white.opacity(0.55))
             if store.isRunning && hidden > 0 {
                 Text("\(hidden) subagent message\(hidden == 1 ? " is" : "s are") hidden. Turn on Subagents in the header to see them.")
-                    .font(.pixel()).foregroundStyle(ternAccent.opacity(0.85))
+                    .font(.pixel()).foregroundStyle(musterAccent.opacity(0.85))
             }
             if !store.isRunning {
                 Button("Restart watcher") { store.restart() }.buttonStyle(PixelButtonStyle())
@@ -706,12 +706,12 @@ struct TernView: View {
 
     /// herdr reports no message text, so the open notch lists its agents instead, each under the agent
     /// that started it, with the state it reports.
-    private func teamView(_ roster: TernRoster) -> some View {
+    private func teamView(_ roster: MusterRoster) -> some View {
         let rows = TeamRow.rows(roster.active + roster.idle)
         return VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 sectionLabel("herdr agents")
-                countBadge(rows.count, color: ternAccent)
+                countBadge(rows.count, color: musterAccent)
                 Spacer(minLength: 6)
                 Text("herdr reports state, not messages")
                     .font(.pixel())
@@ -729,7 +729,7 @@ struct TernView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
-    private func teamRow(_ agent: TernAgent, depth: Int) -> some View {
+    private func teamRow(_ agent: MusterAgent, depth: Int) -> some View {
         let hue = agentHue(agent.pane)
         let state = agent.open ? stateWord(agent) : "closed"
         let attention = agent.status == "blocked" || agent.status == "error"
@@ -757,7 +757,7 @@ struct TernView: View {
     }
 
     /// Who started this herdr agent, and whom it started.
-    private func teamLinks(_ agent: TernAgent, _ roster: TernRoster) -> some View {
+    private func teamLinks(_ agent: MusterAgent, _ roster: MusterRoster) -> some View {
         let children = store.agents.filter { $0.parent == agent.pane }
         return VStack(alignment: .leading, spacing: 6) {
             if let parent = agent.parent, roster.agent(parent) != nil {
@@ -786,7 +786,7 @@ struct TernView: View {
 
     // MARK: Conversation
 
-    private func conversationPanel(_ conversation: TernConversation, _ roster: TernRoster) -> some View {
+    private func conversationPanel(_ conversation: MusterConversation, _ roster: MusterRoster) -> some View {
         VStack(spacing: 8) {
             pairHeader(conversation, roster)
             Rectangle().fill(Color.white.opacity(0.07)).frame(height: 1)
@@ -795,7 +795,7 @@ struct TernView: View {
     }
 
     /// The two participants mirrored around the conversation's message count.
-    private func pairHeader(_ conversation: TernConversation, _ roster: TernRoster) -> some View {
+    private func pairHeader(_ conversation: MusterConversation, _ roster: MusterRoster) -> some View {
         return HStack(spacing: 10) {
             participant(conversation.left, roster, leading: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -811,7 +811,7 @@ struct TernView: View {
     }
 
     /// One side of the pair header; the right side mirrors the left. Opens the agent's detail.
-    private func participant(_ endpoint: TernEndpoint, _ roster: TernRoster, leading: Bool) -> some View {
+    private func participant(_ endpoint: MusterEndpoint, _ roster: MusterRoster, leading: Bool) -> some View {
         let hue = roster.hue(endpoint)
         let known = roster.agent(endpoint.pane) != nil
         let status = participantStatus(endpoint, roster)
@@ -847,7 +847,7 @@ struct TernView: View {
         .accessibilityHint("Shows agent details")
     }
 
-    private func participantStatus(_ endpoint: TernEndpoint, _ roster: TernRoster) -> String {
+    private func participantStatus(_ endpoint: MusterEndpoint, _ roster: MusterRoster) -> String {
         guard let agent = roster.agent(endpoint.pane) else { return "External pane \(endpoint.pane)" }
         guard let name = endpoint.subagent else { return agent.open ? intentLine(agent) : "Pane closed" }
         let subagent = agent.subagents.first { $0.name == name }
@@ -856,7 +856,7 @@ struct TernView: View {
     }
 
     /// Oldest to newest, scrolled to the newest message on open and on each arrival.
-    private func transcript(_ conversation: TernConversation, _ roster: TernRoster) -> some View {
+    private func transcript(_ conversation: MusterConversation, _ roster: MusterRoster) -> some View {
         let groups = conversation.groups.suffix(transcriptLimit)
         let newest = conversation.groups[conversation.groups.count - 1].id
         return ScrollViewReader { proxy in
@@ -882,9 +882,9 @@ struct TernView: View {
         .frame(maxHeight: .infinity)
     }
 
-    private func receiptGroup(_ group: TrafficGroup, _ conversation: TernConversation, _ roster: TernRoster) -> some View {
+    private func receiptGroup(_ group: TrafficGroup, _ conversation: MusterConversation, _ roster: MusterRoster) -> some View {
         let expanded = state.expandedReceipts.contains(group.id)
-        let leading = TernEndpoint(group.root.item.from) == conversation.left
+        let leading = MusterEndpoint(group.root.item.from) == conversation.left
         return LazyVStack(spacing: 5) {
             if group.receipts.count > 1 {
                 repeatDisclosure(group)
@@ -921,9 +921,9 @@ struct TernView: View {
 
     /// One message as a mirrored chat bubble: the left participant's messages hug the left edge and
     /// the right participant's the right edge, each in the sender's color, at most `bubbleShare` wide.
-    private func bubble(_ entry: TrafficEntry, _ conversation: TernConversation, _ roster: TernRoster) -> some View {
+    private func bubble(_ entry: TrafficEntry, _ conversation: MusterConversation, _ roster: MusterRoster) -> some View {
         let item = entry.item
-        let sender = TernEndpoint(item.from)
+        let sender = MusterEndpoint(item.from)
         let leading = sender == conversation.left
         let alignment: Alignment = leading ? .leading : .trailing
         let hue = roster.hue(sender)
@@ -963,9 +963,9 @@ struct TernView: View {
 
     // MARK: Agent detail
 
-    private func agentDetail(_ agent: TernAgent, _ roster: TernRoster) -> some View {
+    private func agentDetail(_ agent: MusterAgent, _ roster: MusterRoster) -> some View {
         let hue = agentHue(agent.pane)
-        let endpoint = TernEndpoint(pane: agent.pane)
+        let endpoint = MusterEndpoint(pane: agent.pane)
         let related = TrafficGroup.group(traffic.entries.filter { $0.item.from.pane == agent.pane || $0.item.to.pane == agent.pane })
         return VStack(alignment: .leading, spacing: 9) {
             HStack(spacing: 8) {
@@ -1023,7 +1023,7 @@ struct TernView: View {
     }
 
     /// What the agent is doing right now, in its own words (the tool intent it reported).
-    private func nowCard(_ agent: TernAgent, hue: Color) -> some View {
+    private func nowCard(_ agent: MusterAgent, hue: Color) -> some View {
         let mood = agentMood(agent)
         return HStack(alignment: .top, spacing: 9) {
             Rectangle().fill(hue).frame(width: 2)
@@ -1059,12 +1059,12 @@ struct TernView: View {
         .fixedSize(horizontal: false, vertical: true)
     }
 
-    private func subagentChips(_ agent: TernAgent, _ roster: TernRoster) -> some View {
+    private func subagentChips(_ agent: MusterAgent, _ roster: MusterRoster) -> some View {
         ScrollView(.horizontal) {
             HStack(spacing: 5) {
                 ForEach(Array(agent.subagents.enumerated()), id: \.offset) { _, subagent in
                     HStack(spacing: 4) {
-                        AgentAvatar(hue: roster.hue(TernEndpoint(pane: agent.pane, subagent: subagent.name)),
+                        AgentAvatar(hue: roster.hue(MusterEndpoint(pane: agent.pane, subagent: subagent.name)),
                                     mood: subagent.running ? .working : subagent.done ? .idle : .closed, size: 13)
                         Text(subagent.name).lineLimit(1)
                         Text(subagent.running ? "running" : subagent.done ? "done" : "idle")
@@ -1079,7 +1079,7 @@ struct TernView: View {
         .scrollIndicators(.never)
     }
 
-    private func messageDetail(_ entry: TrafficEntry, _ roster: TernRoster) -> some View {
+    private func messageDetail(_ entry: TrafficEntry, _ roster: MusterRoster) -> some View {
         let item = entry.item
         return VStack(alignment: .leading, spacing: 9) {
             HStack(spacing: 6) {
@@ -1135,7 +1135,7 @@ struct TernView: View {
     }
 
     @ViewBuilder
-    private func jumpButton(_ pane: UInt64, _ roster: TernRoster, role: String) -> some View {
+    private func jumpButton(_ pane: UInt64, _ roster: MusterRoster, role: String) -> some View {
         if let agent = roster.agent(pane) {
             Button { openAgent(pane) } label: {
                 Text(agentName(agent)).font(.pixel())
@@ -1147,7 +1147,7 @@ struct TernView: View {
 
     // MARK: Exchanges
 
-    private func exchangeList(_ groups: [TrafficGroup], _ roster: TernRoster, empty: String) -> some View {
+    private func exchangeList(_ groups: [TrafficGroup], _ roster: MusterRoster, empty: String) -> some View {
         let recent = groups.suffix(80).reversed()
         return ScrollView {
             LazyVStack(alignment: .leading, spacing: 5) {
@@ -1170,7 +1170,7 @@ struct TernView: View {
         .frame(maxHeight: .infinity)
     }
 
-    private func exchangeGroup(_ group: TrafficGroup, _ roster: TernRoster) -> some View {
+    private func exchangeGroup(_ group: TrafficGroup, _ roster: MusterRoster) -> some View {
         let expanded = state.expandedReceipts.contains(group.id)
         return LazyVStack(alignment: .leading, spacing: 5) {
             if group.receipts.count > 1 { repeatDisclosure(group) }
@@ -1183,10 +1183,10 @@ struct TernView: View {
     }
 
     /// One exchange in an agent's detail: the sender's face, "sender to recipient", and a speech bubble preview.
-    private func exchangeRow(_ entry: TrafficEntry, _ roster: TernRoster) -> some View {
+    private func exchangeRow(_ entry: TrafficEntry, _ roster: MusterRoster) -> some View {
         let item = entry.item
         let fresh = !reduceMotion && traffic.isFresh(entry.id)
-        let color = item.failed ? Color.red : roster.hue(TernEndpoint(item.from))
+        let color = item.failed ? Color.red : roster.hue(MusterEndpoint(item.from))
         let selected = state.selectedMessage == entry.id
         let bubble = PixelBox(topLeading: 0, topTrailing: 2, bottomLeading: 2, bottomTrailing: 2)
         return Button { state.selectedMessage = entry.id } label: {
@@ -1228,10 +1228,10 @@ struct TernView: View {
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
-    private func speakerLabel(_ node: TernNode, _ roster: TernRoster) -> some View {
-        let endpoint = TernEndpoint(node)
+    private func speakerLabel(_ node: MusterNode, _ roster: MusterRoster) -> some View {
+        let endpoint = MusterEndpoint(node)
         return HStack(spacing: 3) {
-            Text(roster.name(TernEndpoint(pane: node.pane)))
+            Text(roster.name(MusterEndpoint(pane: node.pane)))
                 .font(.pixel())
                 .foregroundStyle(roster.hue(endpoint))
             if let subagent = endpoint.subagent {
@@ -1243,19 +1243,19 @@ struct TernView: View {
         .lineLimit(1)
     }
 
-    private func nodeFace(_ node: TernNode, _ roster: TernRoster, size: CGFloat, speaking: Bool = false) -> some View {
-        let endpoint = TernEndpoint(node)
+    private func nodeFace(_ node: MusterNode, _ roster: MusterRoster, size: CGFloat, speaking: Bool = false) -> some View {
+        let endpoint = MusterEndpoint(node)
         return AgentAvatar(hue: roster.hue(endpoint), mood: roster.mood(endpoint), speaking: speaking, size: size)
     }
 
-    private func nodeChip(_ node: TernNode, _ roster: TernRoster) -> some View {
+    private func nodeChip(_ node: MusterNode, _ roster: MusterRoster) -> some View {
         HStack(spacing: 5) {
             nodeFace(node, roster, size: 16)
             speakerLabel(node, roster)
         }
     }
 
-    private func deliveryGlyph(_ item: TernMessage) -> some View {
+    private func deliveryGlyph(_ item: MusterMessage) -> some View {
         // Pending states have no sprite: a square for observable-but-undelivered, a hollow one when
         // delivery cannot be observed.
         Group {
@@ -1277,7 +1277,7 @@ struct TernView: View {
 
     // MARK: Controls
 
-    private func composer(_ agent: TernAgent, hue: Color) -> some View {
+    private func composer(_ agent: MusterAgent, hue: Color) -> some View {
         let canSend = agent.open && !state.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         return HStack(spacing: 7) {
             TextField(agent.open ? "Message \(agentName(agent))…" : "The \(paneWord) is closed", text: $state.draft)
@@ -1336,7 +1336,7 @@ struct TernView: View {
             if offerRestart {
                 Button("Restart") { store.restart() }
                     .buttonStyle(PixelButtonStyle())
-                    .help("Restart ternwatch")
+                    .help("Restart muster")
             }
         }
         .padding(8)
@@ -1378,17 +1378,17 @@ struct TernView: View {
     // MARK: Helpers
 
     /// A fresh message from this endpoint is in flight: its face talks. Pulses expire, so this is finite.
-    private func speaking(_ endpoint: TernEndpoint) -> Bool {
+    private func speaking(_ endpoint: MusterEndpoint) -> Bool {
         !reduceMotion && traffic.speaking(endpoint)
     }
 
     /// A fresh message to this endpoint just arrived: its face perks up.
-    private func listening(_ endpoint: TernEndpoint) -> Bool {
+    private func listening(_ endpoint: MusterEndpoint) -> Bool {
         !reduceMotion && traffic.listening(endpoint)
     }
 
     /// Pins a conversation (nil follows the latest) and returns to it from any detail.
-    private func show(_ id: TernConversation.ID?) {
+    private func show(_ id: MusterConversation.ID?) {
         withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
             state.pickingRecipient = false
             state.selectedMessage = nil
@@ -1405,7 +1405,7 @@ struct TernView: View {
         }
     }
 
-    private func send(to agent: TernAgent) {
+    private func send(to agent: MusterAgent) {
         let text = state.draft
         guard agent.open, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         store.send(agent, message: text)
@@ -1423,26 +1423,26 @@ struct TernView: View {
         name.count > 16 ? String(name.prefix(15)) + "…" : name
     }
 
-    private func route(_ item: TernMessage, _ roster: TernRoster, spoken: Bool = false) -> String {
-        let from = roster.fullName(TernEndpoint(item.from))
-        let to = roster.fullName(TernEndpoint(item.to))
+    private func route(_ item: MusterMessage, _ roster: MusterRoster, spoken: Bool = false) -> String {
+        let from = roster.fullName(MusterEndpoint(item.from))
+        let to = roster.fullName(MusterEndpoint(item.to))
         return spoken ? "\(from) \(item.reply ? "replied to" : "to") \(to)" : "\(from) → \(to)"
     }
 }
 
 /// One row of the herdr agent tree: roots in roster order, each followed by the agents it started.
 private struct TeamRow: Identifiable {
-    let agent: TernAgent
+    let agent: MusterAgent
     let depth: Int
     var id: UInt64 { agent.pane }
 
-    static func rows(_ agents: [TernAgent]) -> [TeamRow] {
+    static func rows(_ agents: [MusterAgent]) -> [TeamRow] {
         let panes = Set(agents.map(\.pane))
-        let hasParent: (TernAgent) -> Bool = { $0.parent.map(panes.contains) ?? false }
+        let hasParent: (MusterAgent) -> Bool = { $0.parent.map(panes.contains) ?? false }
         let children = Dictionary(grouping: agents.filter(hasParent)) { $0.parent ?? 0 }
         var rows: [TeamRow] = []
         var seen = Set<UInt64>()
-        func visit(_ agent: TernAgent, _ depth: Int) {
+        func visit(_ agent: MusterAgent, _ depth: Int) {
             guard seen.insert(agent.pane).inserted else { return }
             rows.append(TeamRow(agent: agent, depth: depth))
             for child in children[agent.pane] ?? [] { visit(child, depth + 1) }
@@ -1456,7 +1456,7 @@ private struct TeamRow: Identifiable {
 
 private enum DetailMode: Hashable {
     case empty
-    case conversation(TernConversation.ID)
+    case conversation(MusterConversation.ID)
     case agent(UInt64)
     case message(TrafficEntry.ID)
 }
@@ -1501,7 +1501,7 @@ struct TrafficKey: Hashable {
     let text: String
     let sent: Int64?
     let reply: Bool
-    init(_ item: TernMessage) {
+    init(_ item: MusterMessage) {
         from = item.from.pane; fromSubagent = item.from.subagent
         to = item.to.pane; toSubagent = item.to.subagent
         kind = item.kind; text = item.text; sent = item.sentMs; reply = item.reply
@@ -1514,11 +1514,11 @@ struct TrafficEntry: Identifiable {
         case legacy(key: TrafficKey, occurrence: Int)
     }
     let id: ID
-    let item: TernMessage
+    let item: MusterMessage
     let offset: Int
     let time: String
     let preview: String
-    init(id: ID, item: TernMessage, offset: Int) {
+    init(id: ID, item: MusterMessage, offset: Int) {
         self.id = id; self.item = item; self.offset = offset
         time = (item.sentMs ?? item.deliveredMs).map { Self.clock.string(from: Date(timeIntervalSince1970: Double($0) / 1000)) } ?? "--:--:--"
         preview = item.text.isEmpty ? "(Empty message)" : String(item.text.prefix(240)).replacingOccurrences(of: "\n", with: " ")
@@ -1543,7 +1543,7 @@ struct TrafficPulse: Identifiable {
 
 // MARK: - Formatting
 
-func agentName(_ agent: TernAgent) -> String {
+func agentName(_ agent: MusterAgent) -> String {
     for candidate in [agent.label, agent.title] {
         let name = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
         let identifier = name.replacingOccurrences(of: "-", with: "")
@@ -1554,7 +1554,7 @@ func agentName(_ agent: TernAgent) -> String {
     return repository.isEmpty ? "Agent · tab \(agent.tab)" : "\(repository) · t\(agent.tab)"
 }
 
-private func agentStatus(_ agent: TernAgent) -> String {
+private func agentStatus(_ agent: MusterAgent) -> String {
     if !agent.open { return "closed" }
     if agent.working { return agent.tool.map { $0.name.isEmpty ? "working" : $0.name } ?? "working" }
     if agent.subagents.contains(where: \.running) { return "orchestrating" }
@@ -1562,12 +1562,12 @@ private func agentStatus(_ agent: TernAgent) -> String {
 }
 
 /// The reported state word: `working`, `idle`, or herdr's `blocked`, `done` and `error`.
-func stateWord(_ agent: TernAgent) -> String {
+func stateWord(_ agent: MusterAgent) -> String {
     if agent.working { return "working" }
     return agent.status.flatMap { $0.isEmpty ? nil : $0 } ?? "idle"
 }
 
-func agentMood(_ agent: TernAgent) -> AgentMood {
+func agentMood(_ agent: MusterAgent) -> AgentMood {
     if !agent.open { return .closed }
     if agent.working { return .working }
     // Waiting on running subagents, or (herdr) blocked on the person.
@@ -1576,7 +1576,7 @@ func agentMood(_ agent: TernAgent) -> AgentMood {
 }
 
 /// The agent's current action in plain words: its reported tool intent first, then what it waits on.
-private func intentLine(_ agent: TernAgent) -> String {
+private func intentLine(_ agent: MusterAgent) -> String {
     let intent = agent.tool?.intent.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     if !intent.isEmpty { return intent }
     if agent.status == "blocked" { return "Waiting for you to answer" }
@@ -1588,14 +1588,14 @@ private func intentLine(_ agent: TernAgent) -> String {
 }
 
 /// Tool name shown as a tag beside an intent; omitted when the intent line already names the tool.
-private func toolTagName(_ agent: TernAgent) -> String? {
+private func toolTagName(_ agent: MusterAgent) -> String? {
     guard let tool = agent.tool, !tool.name.isEmpty,
           !tool.intent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
     return tool.name
 }
 
 /// The herdr tree row's second line: agent CLI, folder, and time quiet.
-private func teamDetail(_ agent: TernAgent) -> String {
+private func teamDetail(_ agent: MusterAgent) -> String {
     let home = FileManager.default.homeDirectoryForCurrentUser.path
     let cwd = agent.cwd.hasPrefix(home) ? "~" + agent.cwd.dropFirst(home.count) : agent.cwd
     var parts = [agent.cli ?? "", cwd]
@@ -1603,7 +1603,7 @@ private func teamDetail(_ agent: TernAgent) -> String {
     return parts.filter { !$0.isEmpty }.joined(separator: " · ")
 }
 
-private func agentHeadline(_ agent: TernAgent) -> String {
+private func agentHeadline(_ agent: MusterAgent) -> String {
     var parts = [agentStatus(agent)]
     if agent.open && !agent.working { parts.append("quiet \(quietLabel(agent.quietMs))") }
     if let model = agent.model, !model.isEmpty { parts.append(model) } else if let cli = agent.cli, !cli.isEmpty { parts.append(cli) }
@@ -1611,7 +1611,7 @@ private func agentHeadline(_ agent: TernAgent) -> String {
     return parts.joined(separator: " · ")
 }
 
-private func locationLine(_ agent: TernAgent, paneWord: String) -> String {
+private func locationLine(_ agent: MusterAgent, paneWord: String) -> String {
     let home = FileManager.default.homeDirectoryForCurrentUser.path
     let cwd = agent.cwd.hasPrefix(home) ? "~" + agent.cwd.dropFirst(home.count) : agent.cwd
     return "\(paneWord) \(agent.target) · tab \(agent.tab)" + (cwd.isEmpty ? "" : " · \(cwd)")
@@ -1631,14 +1631,14 @@ private func tokenLabel(_ tokens: UInt64) -> String {
     return String(tokens)
 }
 
-private func delivery(_ message: TernMessage) -> String {
+private func delivery(_ message: MusterMessage) -> String {
     if message.failed { return message.outcome.flatMap { $0.isEmpty ? nil : $0 } ?? "Failed" }
     if let outcome = message.outcome, !outcome.isEmpty { return outcome }
     if message.deliveredMs != nil { return "Delivered" }
     return message.deliveryObservable ? "Awaiting delivery" : "Delivery unknown"
 }
 
-private func deliveryColor(_ message: TernMessage) -> Color {
+private func deliveryColor(_ message: MusterMessage) -> Color {
     if message.failed { return Color.red }
     if message.deliveredMs != nil { return Color.green.opacity(0.85) }
     return Color.white.opacity(message.deliveryObservable ? 0.45 : 0.35)

@@ -371,7 +371,7 @@ mod tests {
 
     #[test]
     fn tail_skips_the_cut_line_and_keeps_an_unfinished_line_for_later() {
-        let dir = std::env::temp_dir().join(format!("ternwatch-tail-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("muster-tail-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("s.jsonl");
         let mut file = File::create(&path).unwrap();
@@ -396,7 +396,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn tail_resets_after_truncation_or_atomic_replacement() {
-        let dir = std::env::temp_dir().join(format!("ternwatch-replace-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("muster-replace-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("session.jsonl");
         std::fs::write(&path, "{\"n\":100}\n{\"unfinished\":").unwrap();
@@ -414,7 +414,7 @@ mod tests {
 
     #[test]
     fn tail_keeps_entry_identity_across_truncation_and_preserves_new_entries() {
-        let dir = std::env::temp_dir().join(format!("ternwatch-entry-ids-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("muster-entry-ids-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("session.jsonl");
         let first = json!({"id": "first", "text": "same message"});
@@ -450,7 +450,7 @@ mod tests {
         use crate::model::Model;
 
         let dir =
-            std::env::temp_dir().join(format!("ternwatch-message-replay-{}", std::process::id()));
+            std::env::temp_dir().join(format!("muster-message-replay-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let sender = dir.join("sender.jsonl");
         let recipient = dir.join("recipient.jsonl");

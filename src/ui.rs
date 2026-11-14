@@ -80,7 +80,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     app.hit_feed_area = Rect::default();
     if area.width < 60 || area.height < 16 {
         let text = format!(
-            "ternwatch needs at least 60×16 (now {}×{}). q quits.",
+            "muster needs at least 60×16 (now {}×{}). q quits.",
             area.width, area.height
         );
         frame.render_widget(Paragraph::new(text).wrap(Wrap { trim: true }), area);
@@ -127,7 +127,7 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App, theme: Theme) {
         .count();
     let mut spans = vec![
         Span::styled(
-            " ternwatch ",
+            " muster ",
             Style::new()
                 .fg(theme.c(Color::Black))
                 .bg(theme.c(Color::Cyan))
@@ -1641,9 +1641,9 @@ fn draw_help(frame: &mut Frame, area: Rect, app: &mut App, theme: Theme) {
     let rows = paragraph.line_count(width.saturating_sub(2));
     let height = rows.saturating_add(2).min(area.height as usize) as u16;
     let title = if rows.saturating_add(2) > height as usize {
-        " ternwatch keys · ↑↓ scroll · Esc closes "
+        " muster keys · ↑↓ scroll · Esc closes "
     } else {
-        " ternwatch keys · Esc closes "
+        " muster keys · Esc closes "
     };
     let rect = center_rect(area, width, height);
     frame.render_widget(Clear, rect);

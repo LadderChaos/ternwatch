@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 @main
-struct TernNotchApp: App {
+struct MusterNotchApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     var body: some Scene {
@@ -46,10 +46,10 @@ enum NotchStyle {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private let store = TernStreamStore()
+    private let store = MusterStreamStore()
     private let model = NotchModel()
-    private let viewState = TernViewState()
-    private lazy var traffic = TernTraffic(store: store)
+    private let viewState = MusterViewState()
+    private lazy var traffic = MusterTraffic(store: store)
     private var panel: NotchPanel?
     private var pendingShrink: DispatchWorkItem?
     private var screenFrame = NSRect.zero
@@ -335,15 +335,15 @@ struct NotchSilhouette: Shape {
 }
 
 private struct NotchRootView: View {
-    @ObservedObject var store: TernStreamStore
-    let traffic: TernTraffic
+    @ObservedObject var store: MusterStreamStore
+    let traffic: MusterTraffic
     @ObservedObject var model: NotchModel
-    let viewState: TernViewState
+    let viewState: MusterViewState
     let toggle: () -> Void
     let collapse: () -> Void
     let hover: (Bool) -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @AppStorage(TernPreferences.showSubagents) private var showSubagents = false
+    @AppStorage(MusterPreferences.showSubagents) private var showSubagents = false
 
     var body: some View {
         let metrics = model.metrics
@@ -355,7 +355,7 @@ private struct NotchRootView: View {
             header(metrics, expanded: expanded)
             if expanded {
                 // Fixed final size: the silhouette unfolds over already-laid-out content instead of reflowing it.
-                TernView(store: store, traffic: traffic, state: viewState)
+                MusterView(store: store, traffic: traffic, state: viewState)
                     .frame(width: metrics.expandedSize.width - 2 * NotchStyle.contentInset,
                            height: max(0, metrics.expandedSize.height - metrics.headerHeight - 18),
                            alignment: .top)
@@ -387,7 +387,7 @@ private struct NotchRootView: View {
     private func header(_ metrics: NotchMetrics, expanded: Bool) -> some View {
         let gap = metrics.cameraWidth > 0 ? metrics.cameraWidth : NotchStyle.fauxCameraGap
         if expanded {
-            let roster = TernRoster(store.agents)
+            let roster = MusterRoster(store.agents)
             let blocked = store.agents.filter { $0.open && $0.status == "blocked" }.count
             HStack(spacing: 0) {
                 HStack(spacing: 8) {
@@ -405,8 +405,8 @@ private struct NotchRootView: View {
                     Spacer(minLength: 0)
                     if store.backend != .herdr { subagentsToggle }
                     iconButton(.refresh, label: "Restart watcher") { store.restart() }
-                    iconButton(.chevronUp, label: "Collapse Tern Notch", action: collapse)
-                    iconButton(.power, label: "Quit Tern Notch") { NSApplication.shared.terminate(nil) }
+                    iconButton(.chevronUp, label: "Collapse Muster Notch", action: collapse)
+                    iconButton(.power, label: "Quit Muster Notch") { NSApplication.shared.terminate(nil) }
                 }
                 .frame(maxWidth: .infinity)
             }
@@ -427,10 +427,10 @@ private struct NotchRootView: View {
         return Button { store.choose(current.other) } label: {
             Text(current.title)
                 .font(.pixel())
-                .foregroundStyle(ternAccent)
+                .foregroundStyle(musterAccent)
                 .padding(.horizontal, 5)
                 .frame(height: 20)
-                .background(PixelBox(1).fill(ternAccent.opacity(0.12)))
+                .background(PixelBox(1).fill(musterAccent.opacity(0.12)))
                 .contentShape(PixelBox(1))
         }
         .buttonStyle(.plain)
@@ -443,7 +443,7 @@ private struct NotchRootView: View {
     /// Off: conversations are between top-level panes only. On: each subagent takes part on its own.
     private var subagentsToggle: some View {
         Toggle("Subagents", isOn: $showSubagents)
-            .toggleStyle(PixelToggleStyle(tint: ternAccent))
+            .toggleStyle(PixelToggleStyle(tint: musterAccent))
             .font(.pixel())
             .foregroundStyle(Color.white.opacity(0.62))
             .fixedSize()
@@ -481,16 +481,16 @@ private struct NotchRootView: View {
 /// Working robots continuously bob and flip their antenna; idle robots stay still. A fresh message
 /// takes priority: the sender hops and flares its antenna, the recipient's eyes widen, and both glows brighten.
 private struct CollapsedHeader: View {
-    @ObservedObject var store: TernStreamStore
-    @ObservedObject var traffic: TernTraffic
-    @ObservedObject var state: TernViewState
+    @ObservedObject var store: MusterStreamStore
+    @ObservedObject var traffic: MusterTraffic
+    @ObservedObject var state: MusterViewState
     let gap: CGFloat
     let height: CGFloat
     let action: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        let roster = TernRoster(store.agents)
+        let roster = MusterRoster(store.agents)
         let conversation = traffic.conversation(pinned: state.pinned)
         let pair = endpoints(conversation, roster)
         Button(action: action) {
@@ -509,24 +509,24 @@ private struct CollapsedHeader: View {
             .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: [pair.left, pair.right])
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Open Tern Notch")
+        .accessibilityLabel("Open Muster Notch")
         .accessibilityValue(status(roster, pair))
         .help("\((store.backend ?? store.choice ?? .tern).title) · \(status(roster, pair))")
     }
 
     private var offline: Bool { !store.isRunning || store.error != nil }
-    private var crewHue: Color { offline ? Color.orange : ternAccent }
+    private var crewHue: Color { offline ? Color.orange : musterAccent }
     private var avatarSize: CGFloat { min(20, max(12, height - 11)) }
 
-    private func endpoints(_ conversation: TernConversation?, _ roster: TernRoster) -> (left: TernEndpoint?, right: TernEndpoint?) {
+    private func endpoints(_ conversation: MusterConversation?, _ roster: MusterRoster) -> (left: MusterEndpoint?, right: MusterEndpoint?) {
         if let conversation = conversation { return (conversation.left, conversation.right) }
-        let candidates = (roster.active + roster.idle.filter(\.open)).prefix(2).map { TernEndpoint(pane: $0.pane, subagent: nil) }
+        let candidates = (roster.active + roster.idle.filter(\.open)).prefix(2).map { MusterEndpoint(pane: $0.pane, subagent: nil) }
         return (candidates.first, candidates.dropFirst().first)
     }
 
     /// An avatar over a dithered glow in its color; the glow brightens while it sends or receives.
     @ViewBuilder
-    private func wing(_ endpoint: TernEndpoint?, _ roster: TernRoster) -> some View {
+    private func wing(_ endpoint: MusterEndpoint?, _ roster: MusterRoster) -> some View {
         let hue = endpoint.map(roster.hue) ?? crewHue
         let mood = endpoint.map(roster.mood) ?? (offline ? .offline : .idle)
         let speaking = endpoint.map { !reduceMotion && traffic.speaking($0) } ?? false
@@ -544,7 +544,7 @@ private struct CollapsedHeader: View {
         .transition(.opacity)
     }
 
-    private func status(_ roster: TernRoster, _ pair: (left: TernEndpoint?, right: TernEndpoint?)) -> String {
+    private func status(_ roster: MusterRoster, _ pair: (left: MusterEndpoint?, right: MusterEndpoint?)) -> String {
         if !store.isRunning { return "Watcher unavailable" }
         let working = "\(roster.active.count) working"
         guard let left = pair.left, let right = pair.right else { return working }

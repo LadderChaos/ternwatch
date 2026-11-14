@@ -1,4 +1,4 @@
-//! Which multiplexer ternwatch reads: Tern (panes and omp transcripts, so agents and messages) or
+//! Which multiplexer muster reads: Tern (panes and omp transcripts, so agents and messages) or
 //! herdr (hc terminals, so agents only).
 
 use std::any::Any;
@@ -56,7 +56,7 @@ impl Backend {
         }
     }
 
-    /// The pane ternwatch itself runs in, to leave it off the map.
+    /// The pane muster itself runs in, to leave it off the map.
     pub fn self_pane(&self) -> Option<PaneId> {
         match self {
             Backend::Tern { .. } => std::env::var("TERN_PANE").ok()?.parse().ok(),

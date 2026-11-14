@@ -27,14 +27,14 @@ use crate::model::{Kind, Model, Node};
 use crate::source::Update;
 
 const HELP: &str = "\
-ternwatch — live map of the coding agents in your Tern or herdr window and the messages between them
+muster — live map of the coding agents in your Tern or herdr window and the messages between them
 
 usage:
-  ternwatch [--backend B] [--no-animation] [--all-panes] [--history MB]
-  ternwatch --json [--follow] [--backend B] [--history MB]
-  ternwatch --frame COLSxROWS [--backend B] [--all-panes] [--history MB]
-  ternwatch --send ADDRESS TEXT [--backend B]
-  ternwatch --focus ADDRESS [--backend B]
+  muster [--backend B] [--no-animation] [--all-panes] [--history MB]
+  muster --json [--follow] [--backend B] [--history MB]
+  muster --frame COLSxROWS [--backend B] [--all-panes] [--history MB]
+  muster --send ADDRESS TEXT [--backend B]
+  muster --focus ADDRESS [--backend B]
 
 With Tern, reads `tern inspect --json` for panes and omp's session transcripts for traffic:
 cross-pane messages (`tern run` / `tern send`), omp IRC, subagent spawns and yields.
@@ -43,7 +43,7 @@ herdr reports no message text, so no messages are shown.
 It never writes to a pane unless you press m and send a message, or use --send.
 
 options:
-  --backend B      tern, herdr or auto (default): the window ternwatch runs in, else a running
+  --backend B      tern, herdr or auto (default): the window muster runs in, else a running
                    Tern, else a running herdr core
   --json           print a snapshot (agents and messages) as JSON and exit
   --follow         with --json, stream snapshots as newline-delimited JSON
@@ -140,10 +140,10 @@ fn parse_args() -> Result<Option<Args>> {
                 return Ok(None);
             }
             "-V" | "--version" => {
-                println!("ternwatch {}", env!("CARGO_PKG_VERSION"));
+                println!("muster {}", env!("CARGO_PKG_VERSION"));
                 return Ok(None);
             }
-            other => bail!("unknown argument {other}; see ternwatch --help"),
+            other => bail!("unknown argument {other}; see muster --help"),
         }
     }
     if args.follow && !args.json {
@@ -173,7 +173,7 @@ fn main() -> Result<()> {
         return frame(backend, args.history, args.all_panes, width, height);
     }
     if !stdout().is_terminal() || std::env::var("TERM").is_ok_and(|t| t == "dumb") {
-        bail!("ternwatch needs a terminal; use --json for a snapshot");
+        bail!("muster needs a terminal; use --json for a snapshot");
     }
     let color = std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty());
     let (tx, rx) = mpsc::channel();

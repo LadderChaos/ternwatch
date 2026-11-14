@@ -49,3 +49,10 @@
 - **Context**: The app had become a standalone Tern viewer (`TernNotch` target) built from a few files, while the repository still carried the unused boring.notch fork: its sources, assets, XPC helper, mediaremote-adapter, Configuration tooling, and package resolution.
 - **Decision**: Keep only the active sources in `TernNotch/` and the project as `TernNotch.xcodeproj`, with bundle `local.tern.notch`, display name "Tern Notch", unsandboxed, `LSUIElement`. Delete all other legacy fork code and tooling. Keep the GPL v3 `LICENSE` and attribute boring.notch as the upstream origin.
 - **Consequences**: No upstream compatibility to maintain and no third-party dependencies. Session-HUD features from ADR-001–006 are gone. Repository folder and GitHub rename happen separately.
+
+## ADR-008: Rename to muster and Muster Notch
+- **Date**: 2026-11-14
+- **Status**: Accepted
+- **Context**: The watcher and the app now read herdr as well as Tern, so the names ternwatch and Tern Notch no longer describe them.
+- **Decision**: Rename the watcher and repository to `muster` and the app to Muster Notch: project and target `MusterNotch`, bundle `local.muster.notch`, bundled executable `muster`, override `MUSTER_BIN`, Swift `Muster` type prefix. Names that mean the Tern multiplexer itself (`.tern`, `tern` CLI, `TERN_BIN`) stay.
+- **Consequences**: The new bundle ID starts with fresh settings. Installs of the old `ternwatch` command and `TernNotch.app` must be removed by hand. GitHub redirects the old repository URL.

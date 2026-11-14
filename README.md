@@ -1,10 +1,13 @@
-# ternwatch
+# muster
 
 A live terminal map of coding agents and orchestration traffic in Stencil's Tern,
 or of the agents in a herdr window. Uses the official `tern` CLI and local omp
 transcripts, or herdr-core's `hc`. No plugin or relay service is required.
 
-![ternwatch showing four omp agents: a lead sends tasks to API, web and docs agents, and their replies arrive in the message feed](assets/ternwatch.png)
+![muster showing four omp agents: a lead sends tasks to API, web and docs agents, and their replies arrive in the message feed](assets/muster.png)
+
+muster was called ternwatch until 2026-11-14. If you installed the old command,
+remove it with `cargo uninstall ternwatch`.
 
 ## Run
 
@@ -18,7 +21,7 @@ To install the command:
 
 ```sh
 cargo install --path .
-ternwatch
+muster
 ```
 
 The default view shows agent panes in the current Tern window. Cards show activity,
@@ -49,7 +52,7 @@ between events.
 
 ### herdr
 
-With `--backend herdr`, ternwatch reads a persistent `hc events --json`
+With `--backend herdr`, muster reads a persistent `hc events --json`
 subscription. It shows each terminal that runs an agent, the state the agent
 reports (`working`, `idle`, `blocked`, `done` or `error`) and which agent started
 which. herdr reports no message text, so the feed stays empty and no packets
@@ -91,18 +94,18 @@ fit; Escape, Enter, q or ? closes it. It opens at the top.
 ## Snapshots and options
 
 ```sh
-ternwatch --json
-ternwatch --json --follow
-ternwatch --frame 180x50
-ternwatch --no-animation
-ternwatch --all-panes --history 8
-ternwatch --backend herdr --json
-ternwatch --send 7 "run the tests"
-ternwatch --backend herdr --focus vps/t7
+muster --json
+muster --json --follow
+muster --frame 180x50
+muster --no-animation
+muster --all-panes --history 8
+muster --backend herdr --json
+muster --send 7 "run the tests"
+muster --backend herdr --focus vps/t7
 ```
 
 `--backend` takes `tern`, `herdr` or `auto` (the default). `auto` uses the window
-ternwatch runs in, else a running Tern, else a running herdr core. Every JSON
+muster runs in, else a running Tern, else a running herdr core. Every JSON
 snapshot names its `backend`. Each agent has an `address` (the Tern pane number,
 or the hc terminal address), a `status` (`working` or `idle`, or herdr's
 `blocked`, `done` or `error`), and a nullable `parent` (the herdr agent that
@@ -167,14 +170,14 @@ The watcher does not alter agent configuration. Pane writes occur only when you
 explicitly compose text with `m` or run `--send`; Enter on a card changes focus in
 Tern or herdr.
 
-## Tern Notch
+## Muster Notch
 
-`notch/` holds Tern Notch, a macOS app that shows the same agents and messages in
-the MacBook camera notch. It runs `ternwatch --json --follow` and bundles the watcher
+`notch/` holds Muster Notch, a macOS app that shows the same agents and messages in
+the MacBook camera notch. It runs `muster --json --follow` and bundles the watcher
 built from this repository. Its header switches between Tern and herdr. See
 [notch/README.md](notch/README.md).
 
-![Tern Notch showing a conversation between two agents](notch/assets/tern-notch.png)
+![Muster Notch showing a conversation between two agents](notch/assets/muster-notch.png)
 
 ## Checks
 

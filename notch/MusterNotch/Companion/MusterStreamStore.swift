@@ -1,15 +1,15 @@
 import Combine
 import Foundation
 
-struct TernSnapshot: Decodable {
-    let backend: TernBackend?
-    let agents: [TernAgent]
-    let messages: [TernMessage]
+struct MusterSnapshot: Decodable {
+    let backend: MusterBackend?
+    let agents: [MusterAgent]
+    let messages: [MusterMessage]
     let error: String?
 }
 
-/// The window ternwatch reads. herdr reports agents and their state, but no message text.
-enum TernBackend: String, Decodable {
+/// The window muster reads. herdr reports agents and their state, but no message text.
+enum MusterBackend: String, Decodable {
     case tern
     case herdr
 
@@ -17,10 +17,10 @@ enum TernBackend: String, Decodable {
     var name: String { self == .tern ? "Tern" : "herdr" }
     /// What the window calls one of its terminals.
     var paneWord: String { self == .tern ? "pane" : "terminal" }
-    var other: TernBackend { self == .tern ? .herdr : .tern }
+    var other: MusterBackend { self == .tern ? .herdr : .tern }
 }
 
-struct TernAgent: Decodable, Identifiable {
+struct MusterAgent: Decodable, Identifiable {
     let pane: UInt64
     var id: UInt64 { pane }
     /// What the backend's commands take: the Tern pane number, or an hc address (`t7`, `vps/t7`).
@@ -43,38 +43,38 @@ struct TernAgent: Decodable, Identifiable {
     let quietMs: UInt64
     let model: String?
     let tokens: UInt64
-    let tool: TernTool?
-    let todo: TernTodo?
-    let subagents: [TernSubagent]
+    let tool: MusterTool?
+    let todo: MusterTodo?
+    let subagents: [MusterSubagent]
 
     var target: String { address ?? String(pane) }
 }
 
-struct TernTool: Decodable {
+struct MusterTool: Decodable {
     let name: String
     let intent: String
 }
 
-struct TernTodo: Decodable {
+struct MusterTodo: Decodable {
     let done: UInt32
     let total: UInt32
 }
 
-struct TernSubagent: Decodable {
+struct MusterSubagent: Decodable {
     let name: String
     let running: Bool
     let done: Bool
 }
 
-struct TernNode: Decodable {
+struct MusterNode: Decodable {
     let pane: UInt64
     let subagent: String?
 }
 
-struct TernMessage: Decodable {
+struct MusterMessage: Decodable {
     let kind: String
-    let from: TernNode
-    let to: TernNode
+    let from: MusterNode
+    let to: MusterNode
     let text: String
     let sentMs: Int64?
     let deliveredMs: Int64?
@@ -86,7 +86,7 @@ struct TernMessage: Decodable {
     let id: UInt64?
     let repeatOf: UInt64?
 
-    init(kind: String, from: TernNode, to: TernNode, text: String, sentMs: Int64?, deliveredMs: Int64?,
+    init(kind: String, from: MusterNode, to: MusterNode, text: String, sentMs: Int64?, deliveredMs: Int64?,
          failed: Bool, outcome: String?, deliveryObservable: Bool, reply: Bool, replied: Bool,
          id: UInt64? = nil, repeatOf: UInt64? = nil) {
         self.kind = kind
@@ -105,13 +105,13 @@ struct TernMessage: Decodable {
     }
 }
 
-final class TernStreamStore: ObservableObject {
-    @Published private(set) var agents: [TernAgent] = []
-    @Published private(set) var messages: [TernMessage] = []
+final class MusterStreamStore: ObservableObject {
+    @Published private(set) var agents: [MusterAgent] = []
+    @Published private(set) var messages: [MusterMessage] = []
     /// The backend the running watcher reads; nil until its first snapshot.
-    @Published private(set) var backend: TernBackend?
+    @Published private(set) var backend: MusterBackend?
     /// The backend the person chose; nil lets the watcher pick (Tern when it runs, else herdr).
-    @Published private(set) var choice = UserDefaults.standard.string(forKey: TernPreferences.backend).flatMap(TernBackend.init(rawValue:))
+    @Published private(set) var choice = UserDefaults.standard.string(forKey: MusterPreferences.backend).flatMap(MusterBackend.init(rawValue:))
     @Published private(set) var error: String?
     @Published private(set) var actionError: String?
     @Published private(set) var isRunning = false
@@ -167,18 +167,18 @@ final class TernStreamStore: ObservableObject {
     }
 
     /// Watches `backend` from now on, also after relaunch.
-    func choose(_ backend: TernBackend) {
-        UserDefaults.standard.set(backend.rawValue, forKey: TernPreferences.backend)
+    func choose(_ backend: MusterBackend) {
+        UserDefaults.standard.set(backend.rawValue, forKey: MusterPreferences.backend)
         choice = backend
         actionError = nil
         restart()
     }
 
-    func focus(_ agent: TernAgent) {
+    func focus(_ agent: MusterAgent) {
         runAction(["--focus", agent.target], verb: "Focus")
     }
 
-    func send(_ agent: TernAgent, message: String) {
+    func send(_ agent: MusterAgent, message: String) {
         runAction(["--send", agent.target, message], verb: "Send")
     }
 
@@ -201,16 +201,16 @@ final class TernStreamStore: ObservableObject {
         return paths.first { fm.isExecutableFile(atPath: $0) }
     }
 
-    /// The bundled ternwatch built from this repository; TERNWATCH_BIN overrides it for development.
+    /// The bundled muster built from this repository; MUSTER_BIN overrides it for development.
     private static func watcher(_ environment: [String: String]) -> String? {
-        let override = environment["TERNWATCH_BIN"].flatMap { $0.isEmpty ? nil : $0 }
+        let override = environment["MUSTER_BIN"].flatMap { $0.isEmpty ? nil : $0 }
         let found = override != nil
-            ? executable("ternwatch", override: override, environment: environment)
-            : Bundle.main.url(forAuxiliaryExecutable: "ternwatch")?.path
+            ? executable("muster", override: override, environment: environment)
+            : Bundle.main.url(forAuxiliaryExecutable: "muster")?.path
         return found.flatMap { FileManager.default.isExecutableFile(atPath: $0) ? $0 : nil }
     }
 
-    /// The environment ternwatch runs in: a GUI app's PATH, plus where Tern's CLI lives.
+    /// The environment muster runs in: a GUI app's PATH, plus where Tern's CLI lives.
     private static func watcherEnvironment() -> [String: String] {
         var environment = environment()
         let home = FileManager.default.homeDirectoryForCurrentUser.path
@@ -229,7 +229,7 @@ final class TernStreamStore: ObservableObject {
         guard shouldRun else { return }
         let environment = Self.watcherEnvironment()
         guard let binary = Self.watcher(environment) else {
-            error = "The bundled ternwatch is missing. Rebuild Tern Notch, or set TERNWATCH_BIN to a ternwatch executable."
+            error = "The bundled muster is missing. Rebuild Muster Notch, or set MUSTER_BIN to a muster executable."
             scheduleRetry()
             return
         }
@@ -249,7 +249,7 @@ final class TernStreamStore: ObservableObject {
         do {
             try child.run()
         } catch {
-            self.error = "Could not start ternwatch: \(error.localizedDescription)"
+            self.error = "Could not start muster: \(error.localizedDescription)"
             scheduleRetry()
             return
         }
@@ -273,12 +273,12 @@ final class TernStreamStore: ObservableObject {
                 let data = stdout.fileHandleForReading.availableData
                 if data.isEmpty { break }
                 buffer.append(data)
-                var latest: Result<TernSnapshot, Error>?
+                var latest: Result<MusterSnapshot, Error>?
                 while let newline = buffer.firstIndex(of: 0x0A) {
                     let line = Data(buffer[..<newline])
                     buffer.removeSubrange(...newline)
                     guard !line.isEmpty else { continue }
-                    latest = Result { try decoder.decode(TernSnapshot.self, from: line) }
+                    latest = Result { try decoder.decode(MusterSnapshot.self, from: line) }
                 }
                 if let latest = latest {
                     // Backpressure keeps a busy stream from queuing unlimited UI updates.
@@ -289,9 +289,9 @@ final class TernStreamStore: ObservableObject {
                             self.agents = snapshot.agents
                             self.messages = snapshot.messages
                             self.backend = snapshot.backend ?? .tern
-                            self.error = snapshot.error.map { "ternwatch: \($0)" }
+                            self.error = snapshot.error.map { "muster: \($0)" }
                         case .failure(let error):
-                            self.error = "Invalid ternwatch snapshot: \(error.localizedDescription)"
+                            self.error = "Invalid muster snapshot: \(error.localizedDescription)"
                         }
                     }
                 }
@@ -308,9 +308,9 @@ final class TernStreamStore: ObservableObject {
                 self.agents = []
                 self.messages = []
                 if detail.contains("--follow") || detail.contains("--backend") {
-                    self.error = "This ternwatch is too old for Tern Notch. Point TERNWATCH_BIN at a current build, or unset it to use the bundled one. \(detail)"
+                    self.error = "This muster is too old for Muster Notch. Point MUSTER_BIN at a current build, or unset it to use the bundled one. \(detail)"
                 } else {
-                    self.error = detail.isEmpty ? "ternwatch stopped (exit \(child.terminationStatus)). Retrying…" : "ternwatch stopped: \(detail)"
+                    self.error = detail.isEmpty ? "muster stopped (exit \(child.terminationStatus)). Retrying…" : "muster stopped: \(detail)"
                 }
                 self.scheduleRetry()
             }
@@ -334,11 +334,11 @@ final class TernStreamStore: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: task)
     }
 
-    /// Runs `ternwatch <arguments>` against the watched backend; it knows each window's commands.
+    /// Runs `muster <arguments>` against the watched backend; it knows each window's commands.
     private func runAction(_ arguments: [String], verb: String) {
         let environment = Self.watcherEnvironment()
         guard let watcher = Self.watcher(environment) else {
-            actionError = "The bundled ternwatch is missing. Rebuild Tern Notch, or set TERNWATCH_BIN to a ternwatch executable."
+            actionError = "The bundled muster is missing. Rebuild Muster Notch, or set MUSTER_BIN to a muster executable."
             return
         }
         actionError = nil
@@ -362,7 +362,7 @@ final class TernStreamStore: ObservableObject {
                     self?.actionError = detail.isEmpty ? "\(verb) failed (exit \(child.terminationStatus))." : "\(verb) failed: \(detail)"
                 }
             } catch {
-                DispatchQueue.main.async { [weak self] in self?.actionError = "Could not run ternwatch: \(error.localizedDescription)" }
+                DispatchQueue.main.async { [weak self] in self?.actionError = "Could not run muster: \(error.localizedDescription)" }
             }
         }
     }

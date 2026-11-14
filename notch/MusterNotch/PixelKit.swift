@@ -2,7 +2,7 @@ import AppKit
 import CoreText
 import SwiftUI
 
-/// Pixel-art primitives shared by every Tern Notch surface. One art pixel is one point (two device
+/// Pixel-art primitives shared by every Muster Notch surface. One art pixel is one point (two device
 /// pixels on Retina), the grid of the bundled Departure Mono font at 11 points. Shapes have stepped
 /// corners, colors change in hard bands, and nothing is blurred.
 enum PixelArt {
